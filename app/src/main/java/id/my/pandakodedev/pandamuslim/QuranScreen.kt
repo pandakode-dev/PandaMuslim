@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,7 +20,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -35,7 +35,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-// Data Model Al-Quran
 data class SurahInfo(
     val nomor: Int,
     val namaArab: String,
@@ -53,14 +52,79 @@ data class AyatItem(
     val audioUrl: String
 )
 
-// Pilihan Gaya Penulisan (Khat)
-enum class MushafStyle(val label: String, val fontFamily: FontFamily, val lineSpacing: Int) {
-    UTSMANI("Utsmani Madinah", FontFamily.Serif, 48),
-    INDOPAK("IndoPak Klasik", FontFamily.Default, 52),
-    MODERN("Modern Jelas", FontFamily.SansSerif, 44)
+// 6 Pilihan Gaya Mushaf (Timur Tengah, Makkah, Madinah, IndoPak, Naskhi, Modern)
+enum class MushafStyle(
+    val label: String,
+    val subtitle: String,
+    val fontFamily: FontFamily,
+    val fontWeight: FontWeight,
+    val lineSpacing: Int,
+    val letterSpacingSp: Float,
+    val paperColor: Color,
+    val textColor: Color
+) {
+    MADINAH(
+        label = "🕌 Mushaf Madinah",
+        subtitle = "Kertas Krem Khas Nabawi",
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Bold,
+        lineSpacing = 50,
+        letterSpacingSp = 0.5f,
+        paperColor = Color(0xFFFFFBEB),
+        textColor = Color(0xFF1E293B)
+    ),
+    MAKKAH(
+        label = "🕋 Mushaf Makkah",
+        subtitle = "Khat Tebal Masjidil Haram",
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.ExtraBold,
+        lineSpacing = 54,
+        letterSpacingSp = 1.0f,
+        paperColor = Color(0xFFFFFFFF),
+        textColor = Color(0xFF064E3B)
+    ),
+    TIMUR_TENGAH(
+        label = "📜 Timur Tengah Klasik",
+        subtitle = "Rasm Utsmani Renggang",
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Normal,
+        lineSpacing = 56,
+        letterSpacingSp = 1.6f,
+        paperColor = Color(0xFFFAF5EF),
+        textColor = Color(0xFF27272A)
+    ),
+    INDOPAK(
+        label = "🌏 Mushaf IndoPak (Asia)",
+        subtitle = "Bulat & Ramah Anak-Anak",
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.ExtraBold,
+        lineSpacing = 52,
+        letterSpacingSp = 0.2f,
+        paperColor = Color(0xFFF0FDF4),
+        textColor = Color(0xFF0F172A)
+    ),
+    NASKHI_ANAK(
+        label = "🧒 Khat Naskhi Anak",
+        subtitle = "Huruf Jelas & Mudah Dibaca",
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        lineSpacing = 48,
+        letterSpacingSp = 0.8f,
+        paperColor = Color(0xFFF0F9FF),
+        textColor = Color(0xFF0369A1)
+    ),
+    MODERN(
+        label = "✨ Mushaf Digital Modern",
+        subtitle = "Ringkas & Tajam",
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold,
+        lineSpacing = 46,
+        letterSpacingSp = 0f,
+        paperColor = Color(0xFFFFFFFF),
+        textColor = Color(0xFF0F172A)
+    )
 }
 
-// Pilihan Mode Membaca & Menghafal
 enum class QuranMode(val label: String) {
     BACA("📖 Mode Baca"),
     HAFALAN("🔁 Mode Hafalan"),
@@ -95,9 +159,7 @@ fun QuranScreen(onBack: () -> Unit) {
                                 painter = painterResource(id = R.drawable.ic_panda_quran),
                                 contentDescription = "Quran Panda",
                                 contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
+                                modifier = Modifier.size(36.dp).clip(CircleShape)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text("Al-Quran 114 Surah", fontWeight = FontWeight.ExtraBold, color = Color.White)
@@ -118,7 +180,6 @@ fun QuranScreen(onBack: () -> Unit) {
                     .background(OffWhiteBg)
                     .padding(padding)
             ) {
-                // Kolom Pencarian Surah
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -128,7 +189,7 @@ fun QuranScreen(onBack: () -> Unit) {
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Cari nama surah (contoh: Yasin, Al-Mulk)...", fontSize = 13.sp) },
+                        placeholder = { Text("Cari nama surah (contoh: Yasin, Al-Mulk, An-Naba)...", fontSize = 13.sp) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = EmeraldPrimary) },
                         singleLine = true,
                         shape = RoundedCornerShape(50),
@@ -167,7 +228,7 @@ fun QuranScreen(onBack: () -> Unit) {
                     ) {
                         items(filteredList, key = { it.nomor }) { surah ->
                             Card(
-                                shape = RoundedCornerShape(20.dp),
+                                shape = RoundedCornerShape(22.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                                 modifier = Modifier
@@ -175,12 +236,9 @@ fun QuranScreen(onBack: () -> Unit) {
                                     .clickable { selectedSurah = surah }
                             ) {
                                 Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    // Nomor Surah Segi Delapan / Lingkaran Emas
                                     Box(
                                         contentAlignment = Alignment.Center,
                                         modifier = Modifier
@@ -238,30 +296,24 @@ fun SurahDetailScreen(
     var ayatList by remember { mutableStateOf<List<AyatItem>>(emptyList()) }
     var isLoadingAyat by remember { mutableStateOf(true) }
 
-    // Pengaturan Tampilan & Mode Hafalan
     var selectedMode by remember { mutableStateOf(QuranMode.BACA) }
-    var selectedStyle by remember { mutableStateOf(MushafStyle.UTSMANI) }
+    var selectedStyle by remember { mutableStateOf(MushafStyle.MADINAH) }
     var arabicFontSize by remember { mutableStateOf(28f) }
     var showLatin by remember { mutableStateOf(true) }
     var showTranslation by remember { mutableStateOf(true) }
 
-    // Pengaturan Repeat (Tikrar) untuk Mode Hafalan: 1x, 3x, 5x, 7x
     val repeatOptions = listOf(1, 3, 5, 7)
-    var targetRepeatCount by remember { mutableStateOf(5) } // Default 5x sesuai permintaan
+    var targetRepeatCount by remember { mutableStateOf(5) }
     var currentRepeatProgress by remember { mutableStateOf(0) }
     var autoContinueNextAyat by remember { mutableStateOf(true) }
 
-    // Pengaturan Level Quiz: 1 = Sembunyikan Akhir Ayat, 2 = Sembunyikan Seluruh Ayat Arab
     var quizDifficulty by remember { mutableStateOf(1) }
-    // Menyimpan nomor ayat yang sedang diintip jawabannya pada Mode Quiz
     val revealedAyatNumbers = remember { mutableStateMapOf<Int, Boolean>() }
 
-    // State Audio Player Murottal
     var currentlyPlayingAyat by remember { mutableStateOf<Int?>(null) }
     var isPreparingAudio by remember { mutableStateOf(false) }
     val mediaPlayer = remember { MediaPlayer() }
 
-    // Fungsi Memutar Audio per Ayat dengan Dukungan Loop / Repeat Hafalan
     fun playAyatAudio(ayat: AyatItem, repeatNumber: Int = 1) {
         try {
             isPreparingAudio = true
@@ -286,10 +338,8 @@ fun SurahDetailScreen(
             mediaPlayer.setOnCompletionListener {
                 val maxRepeat = if (selectedMode == QuranMode.HAFALAN) targetRepeatCount else 1
                 if (currentRepeatProgress < maxRepeat) {
-                    // Putar ulang ayat yang sama sampai mencapai target (misal 5x)
                     playAyatAudio(ayat, currentRepeatProgress + 1)
                 } else {
-                    // Jika sudah selesai diulang, cek apakah lanjut ke ayat berikutnya
                     if (autoContinueNextAyat) {
                         val nextAyat = ayatList.find { it.nomorAyat == ayat.nomorAyat + 1 }
                         if (nextAyat != null) {
@@ -304,7 +354,7 @@ fun SurahDetailScreen(
                     }
                 }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             isPreparingAudio = false
             currentlyPlayingAyat = null
         }
@@ -322,9 +372,7 @@ fun SurahDetailScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            try {
-                mediaPlayer.release()
-            } catch (_: Exception) {}
+            try { mediaPlayer.release() } catch (_: Exception) {}
         }
     }
 
@@ -348,9 +396,10 @@ fun SurahDetailScreen(
                             fontSize = 17.sp
                         )
                         Text(
-                            text = "${surah.arti} • ${surah.jumlahAyat} Ayat",
-                            color = MintSurface,
-                            fontSize = 11.sp
+                            text = "${selectedStyle.label} • ${surah.jumlahAyat} Ayat",
+                            color = GoldAccent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 },
@@ -364,18 +413,13 @@ fun SurahDetailScreen(
                 },
                 actions = {
                     IconButton(onClick = { showSettingsPanel = !showSettingsPanel }) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Pengaturan Mushaf",
-                            tint = GoldAccent
-                        )
+                        Icon(Icons.Default.Settings, contentDescription = "Pengaturan", tint = GoldAccent)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = EmeraldDark)
             )
         },
         bottomBar = {
-            // Mini Audio Controller Bar jika ada Murottal yang sedang berputar
             if (currentlyPlayingAyat != null) {
                 Surface(
                     color = EmeraldDark,
@@ -383,9 +427,7 @@ fun SurahDetailScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -425,7 +467,7 @@ fun SurahDetailScreen(
                 .background(OffWhiteBg)
                 .padding(padding)
         ) {
-            // Bar Pemilih 3 Mode Utama: Mode Baca, Mode Hafalan, Mode Quiz
+            // Bar Pemilih 3 Mode Utama: Baca, Hafalan 5x, Quiz
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -448,41 +490,77 @@ fun SurahDetailScreen(
                             fontWeight = FontWeight.ExtraBold,
                             color = if (isSelected) EmeraldDark else Color.White,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 10.dp)
+                            modifier = Modifier.padding(vertical = 9.dp)
                         )
                     }
                 }
             }
 
-            // Panel Kontrol Tambahan Sesuai Mode (Hafalan / Quiz / Gaya Tulisan)
+            // BARIS PEMILIH CEPAT 6 JENIS KHAT / TULISAN (MAKKAH, MADINAH, TIMUR TENGAH, INDOPAK, ANAK)
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MintSurface)
+            ) {
+                items(MushafStyle.values()) { style ->
+                    val chosen = selectedStyle == style
+                    Surface(
+                        color = if (chosen) EmeraldDark else Color.White,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .border(
+                                width = if (chosen) 2.dp else 1.dp,
+                                color = if (chosen) GoldAccent else EmeraldPrimary.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(14.dp)
+                            )
+                            .clickable { selectedStyle = style }
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = style.label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (chosen) GoldAccent else EmeraldDark
+                            )
+                            Text(
+                                text = style.subtitle,
+                                fontSize = 9.sp,
+                                color = if (chosen) Color.White else Color.Gray
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Panel Kontrol Mode Hafalan / Quiz / Ukuran Huruf
             AnimatedVisibility(visible = showSettingsPanel || selectedMode != QuranMode.BACA) {
                 Card(
                     shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MintSurface),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
                         modifier = Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Opsi Khusus Mode Hafalan (Pengulangan 1x, 3x, 5x, 7x)
                         if (selectedMode == QuranMode.HAFALAN) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(
-                                    text = "🔁 Ulangi Audio Per Ayat:",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp,
-                                    color = EmeraldDark
-                                )
+                                Text("🔁 Ulangi Audio Per Ayat:", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp, color = EmeraldDark)
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     repeatOptions.forEach { countOption ->
                                         val active = targetRepeatCount == countOption
                                         Surface(
-                                            color = if (active) EmeraldPrimary else Color.White,
+                                            color = if (active) EmeraldPrimary else MintSurface,
                                             shape = RoundedCornerShape(10.dp),
                                             modifier = Modifier.clickable { targetRepeatCount = countOption }
                                         ) {
@@ -499,11 +577,10 @@ fun SurahDetailScreen(
                             }
                         }
 
-                        // Opsi Khusus Mode Quiz (Uji Hafalan)
                         if (selectedMode == QuranMode.QUIZ) {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = "🧠 Pengaturan Mode Quiz Hafalan (Ketuk ayat untuk membuka jawaban):",
+                                    text = "🧠 Mode Quiz Hafalan (Ketuk kartu ayat untuk membuka jawaban):",
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 12.sp,
                                     color = EmeraldDark
@@ -529,40 +606,7 @@ fun SurahDetailScreen(
                             }
                         }
 
-                        // Pengaturan Jenis Tulisan Arab (Khat) & Ukuran Font (Muncul saat ikon Gear diklik)
                         if (showSettingsPanel) {
-                            Divider(color = EmeraldPrimary.copy(alpha = 0.2f))
-                            Text(
-                                text = "✒️ Pilih Gaya Tulisan Arab (Khat):",
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 12.sp,
-                                color = EmeraldDark
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                MushafStyle.values().forEach { style ->
-                                    val chosen = selectedStyle == style
-                                    Surface(
-                                        color = if (chosen) EmeraldDark else Color.White,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { selectedStyle = style }
-                                    ) {
-                                        Text(
-                                            text = style.label,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (chosen) GoldAccent else EmeraldDark,
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
-                                        )
-                                    }
-                                }
-                            }
-
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -574,16 +618,13 @@ fun SurahDetailScreen(
                                         Text("A-", fontWeight = FontWeight.ExtraBold, color = EmeraldDark)
                                     }
                                     Text("${arabicFontSize.toInt()} pt", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    TextButton(onClick = { if (arabicFontSize < 44f) arabicFontSize += 2f }) {
+                                    TextButton(onClick = { if (arabicFontSize < 46f) arabicFontSize += 2f }) {
                                         Text("A+", fontWeight = FontWeight.ExtraBold, color = EmeraldDark)
                                     }
                                 }
                             }
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 FilterChip(
                                     selected = showLatin,
                                     onClick = { showLatin = !showLatin },
@@ -600,7 +641,6 @@ fun SurahDetailScreen(
                 }
             }
 
-            // Daftar Ayat Al-Quran
             if (isLoadingAyat) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = EmeraldPrimary)
@@ -611,7 +651,6 @@ fun SurahDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    // Lafadz Bismillah di awal surah (kecuali Surah At-Taubah / nomor 9)
                     if (surah.nomor != 9 && surah.nomor != 1) {
                         item(key = "bismillah_banner") {
                             Card(
@@ -625,9 +664,7 @@ fun SurahDetailScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = GoldAccent,
                                     textAlign = TextAlign.Center,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 18.dp)
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp)
                                 )
                             }
                         }
@@ -640,14 +677,14 @@ fun SurahDetailScreen(
                         Card(
                             shape = RoundedCornerShape(22.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (isPlayingThis) Color(0xFFE0F7FA) else Color.White
+                                containerColor = if (isPlayingThis) Color(0xFFE0F7FA) else selectedStyle.paperColor
                             ),
                             elevation = CardDefaults.cardElevation(defaultElevation = if (isPlayingThis) 6.dp else 2.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .border(
-                                    width = if (isPlayingThis) 2.dp else 0.dp,
-                                    color = if (isPlayingThis) EmeraldPrimary else Color.Transparent,
+                                    width = if (isPlayingThis) 2.dp else 1.dp,
+                                    color = if (isPlayingThis) EmeraldPrimary else GoldAccent.copy(alpha = 0.35f),
                                     shape = RoundedCornerShape(22.dp)
                                 )
                                 .clickable {
@@ -657,7 +694,6 @@ fun SurahDetailScreen(
                                 }
                         ) {
                             Column(modifier = Modifier.padding(18.dp)) {
-                                // Baris Atas: Nomor Ayat & Tombol Play Murottal
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -667,10 +703,7 @@ fun SurahDetailScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Surface(
-                                            color = EmeraldDark,
-                                            shape = RoundedCornerShape(50)
-                                        ) {
+                                        Surface(color = EmeraldDark, shape = RoundedCornerShape(50)) {
                                             Text(
                                                 text = "Ayat ${ayat.nomorAyat}",
                                                 color = GoldAccent,
@@ -679,13 +712,9 @@ fun SurahDetailScreen(
                                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                                             )
                                         }
-
                                         if (isPlayingThis) {
                                             val maxRep = if (selectedMode == QuranMode.HAFALAN) targetRepeatCount else 1
-                                            Surface(
-                                                color = GoldAccent,
-                                                shape = RoundedCornerShape(50)
-                                            ) {
+                                            Surface(color = GoldAccent, shape = RoundedCornerShape(50)) {
                                                 Text(
                                                     text = "🔊 Putaran $currentRepeatProgress/${maxRep}x",
                                                     color = EmeraldDark,
@@ -697,7 +726,6 @@ fun SurahDetailScreen(
                                         }
                                     }
 
-                                    // Tombol Play / Stop Suara Ayat
                                     FilledIconButton(
                                         onClick = {
                                             if (isPlayingThis) stopAudio()
@@ -717,7 +745,6 @@ fun SurahDetailScreen(
 
                                 Spacer(modifier = Modifier.height(14.dp))
 
-                                // Teks Arab (Menyesuaikan Mode Baca / Hafalan / Quiz)
                                 val displayedArabic = remember(ayat.teksArab, selectedMode, quizDifficulty, isRevealed) {
                                     if (selectedMode != QuranMode.QUIZ || isRevealed) {
                                         ayat.teksArab
@@ -729,15 +756,15 @@ fun SurahDetailScreen(
                                 Text(
                                     text = displayedArabic,
                                     fontFamily = selectedStyle.fontFamily,
+                                    fontWeight = selectedStyle.fontWeight,
                                     fontSize = arabicFontSize.sp,
                                     lineHeight = selectedStyle.lineSpacing.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A),
+                                    letterSpacing = selectedStyle.letterSpacingSp.sp,
+                                    color = selectedStyle.textColor,
                                     textAlign = TextAlign.End,
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
-                                // Petunjuk Interaktif saat Mode Quiz Aktif
                                 if (selectedMode == QuranMode.QUIZ) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Surface(
@@ -757,7 +784,6 @@ fun SurahDetailScreen(
                                     }
                                 }
 
-                                // Teks Latin & Terjemahan (Disembunyikan saat Mode Quiz belum dibuka jawabannya)
                                 if (selectedMode != QuranMode.QUIZ || isRevealed) {
                                     if (showLatin && ayat.teksLatin.isNotBlank()) {
                                         Spacer(modifier = Modifier.height(10.dp))
@@ -787,24 +813,20 @@ fun SurahDetailScreen(
     }
 }
 
-// Fungsi Menyembunyikan Sebagian / Seluruh Kata Arab untuk Mode Quiz Hafalan
 fun maskArabicForQuiz(arabicText: String, difficulty: Int): String {
     val words = arabicText.trim().split("\\s+".toRegex())
     if (words.isEmpty()) return arabicText
 
     return if (difficulty == 2) {
-        // Level 2: Tampilkan 1 kata pertama saja sebagai pancingan, sisanya titik-titik
         val firstWord = words.first()
         "$firstWord  • • • • • • ❓"
     } else {
-        // Level 1: Tampilkan separuh awal ayat, sembunyikan separuh akhir ayat
         val halfIndex = (words.size / 2).coerceAtLeast(1)
         val visiblePart = words.take(halfIndex).joinToString(" ")
         "$visiblePart   [ • • • ❓ ]"
     }
 }
 
-// Fungsi Mengambil Daftar 114 Surah dari API Resmi EQuran.id v2
 suspend fun fetchSurahList(): List<SurahInfo> = withContext(Dispatchers.IO) {
     val list = mutableListOf<SurahInfo>()
     try {
@@ -834,7 +856,6 @@ suspend fun fetchSurahList(): List<SurahInfo> = withContext(Dispatchers.IO) {
     list
 }
 
-// Fungsi Mengambil Detail Ayat beserta Link Audio Murottal per Ayat
 suspend fun fetchSurahDetail(nomorSurah: Int): List<AyatItem> = withContext(Dispatchers.IO) {
     val list = mutableListOf<AyatItem>()
     try {
@@ -848,7 +869,6 @@ suspend fun fetchSurahDetail(nomorSurah: Int): List<AyatItem> = withContext(Disp
             for (i in 0 until ayatArray.length()) {
                 val obj = ayatArray.getJSONObject(i)
                 val audioObj = obj.getJSONObject("audio")
-                // kode "05" adalah Misyari Rasyid Al-Afasy
                 val audioUrl = audioObj.optString("05", audioObj.optString("01", ""))
                 list.add(
                     AyatItem(

@@ -41,28 +41,24 @@ fun PandaMuslimAppNavigator() {
                     }
                 )
             }
-            "Al-Quran" -> {
-                QuranScreen(
-                    onBack = { currentScreen = "HOME" }
-                )
-            }
-            "Asmaul" -> {
-                AsmaulHusnaScreen(
-                    onBack = { currentScreen = "HOME" }
-                )
-            }
-            "Tasbih" -> {
-                Tasbih3DScreen(
-                    onBack = { currentScreen = "HOME" }
-                )
-            }
+            "Donasi" -> DonasiScreen(onBack = { currentScreen = "HOME" })
+            "Al-Quran" -> QuranScreen(onBack = { currentScreen = "HOME" })
+            "Asmaul" -> AsmaulHusnaScreen(onBack = { currentScreen = "HOME" })
+            "Tasbih" -> Tasbih3DScreen(onBack = { currentScreen = "HOME" })
+            "Kiblat" -> KiblatScreen(onBack = { currentScreen = "HOME" })
+            "Amalan" -> AmalanScreen(onBack = { currentScreen = "HOME" })
+            "Kalkulator" -> KalkulatorZakatScreen(onBack = { currentScreen = "HOME" })
+            "Khatam" -> KhatamTrackerScreen(onBack = { currentScreen = "HOME" })
+            "Mewarnai" -> MewarnaiScreen(onBack = { currentScreen = "HOME" })
+            "Komunitas" -> KomunitasScreen(onBack = { currentScreen = "HOME" })
             else -> {
                 val categoryMap = mapOf(
                     "Doa" to "doa",
                     "Tajwid" to "tajwid",
                     "Video" to "video",
                     "Belajar" to "belajar",
-                    "Iqro" to "iqro"
+                    "Iqro" to "iqro",
+                    "FAQ" to "faq"
                 )
                 val categoryKey = categoryMap[screen] ?: "belajar"
                 DynamicContentScreen(
