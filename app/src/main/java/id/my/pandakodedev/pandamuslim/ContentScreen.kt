@@ -1,13 +1,18 @@
 package id.my.pandakodedev.pandamuslim
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.PowerManager
 import android.speech.tts.TextToSpeech
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
@@ -30,21 +35,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import androidx.compose.ui.viewinterop.AndroidView
 import java.util.Locale
 import kotlin.random.Random
 
@@ -91,10 +93,6 @@ fun DynamicContentScreen(
     var items by remember { mutableStateOf<List<ServerContent>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    // 3 Tab Utama di Menu Iqro:
-    // 0 = 📗 Kartu Iqro Lengkap (36+ Kartu Jilid 1–6 + Penanda Mengaji!)
-    // 1 = 📖 Latihan Membaca Iqro 1–6 (Generator Banyak Baris Huruf & Kata)
-    // 2 = 🎵 Papan 30 Huruf Hijaiyah
     var iqroTabMode by remember { mutableStateOf(0) }
     var selectedJilid by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_jilid", 1)) }
     var bookmarkedIqroId by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_id", 901)) }
@@ -105,9 +103,24 @@ fun DynamicContentScreen(
 
     var zoomedContent by remember { mutableStateOf<ServerContent?>(null) }
     var activeSpeakingTitle by remember { mutableStateOf<String?>(null) }
-    val expandedFaqIds = remember { mutableStateMapOf<Int, Boolean>() }
 
-    val mediaPlayer = remember { MediaPlayer() }
+    // State Buka/Tutup Deskripsi (Default: TERTUTUP / false untuk semua item!)
+    val expandedDescriptionIds = remember { mutableStateMapOf<Int, Boolean>() }
+
+    // State Pemutar Video Langsung di Dalam Aplikasi (In-App Player)
+    var activeInAppVideoItem by remember { mutableStateOf<ServerContent?>(null) }
+
+    // State Pemutar Audio/Video Background (Tetap Jalan Walau Layar Terkunci!)
+    var isPlayingBackgroundMedia by remember { mutableStateOf(false) }
+    var isPreparingBackgroundMedia by remember { mutableStateOf(false) }
+    var backgroundMediaTitle by remember { mutableStateOf("") }
+
+    // MediaPlayer dengan PARTIAL_WAKE_LOCK agar CPU & Audio tetap hidup saat layar HP mati/terkunci
+    val bgMediaPlayer = remember {
+        MediaPlayer().apply {
+            setWakeMode(context.applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+        }
+    }
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
 
     DisposableEffect(context) {
@@ -126,12 +139,70 @@ fun DynamicContentScreen(
 
         onDispose {
             try {
-                if (mediaPlayer.isPlaying) mediaPlayer.stop()
-                mediaPlayer.release()
+                if (bgMediaPlayer.isPlaying) bgMediaPlayer.stop()
+                bgMediaPlayer.release()
             } catch (_: Exception) {}
             ttsInstance?.stop()
             ttsInstance?.shutdown()
         }
+    }
+
+    // Fungsi Memutar Kajian / Video MP4 / Audio MP3 di Background (Tetap Jalan Saat Layar Terkunci)
+    fun playBackgroundLockScreenMedia(item: ServerContent) {
+        val rawUrl = item.mediaUrl
+        val parts = rawUrl.split("|")
+        val directStreamUrl = parts.find {
+            it.matches(Regex(".*\\.(mp4|mp3|wav|ogg|m4a)$", RegexOption.IGNORE_CASE))
+        } ?: ""
+
+        if (directStreamUrl.isNotBlank()) {
+            try {
+                ttsEngine?.stop()
+                isPreparingBackgroundMedia = true
+                backgroundMediaTitle = item.title
+                bgMediaPlayer.reset()
+                bgMediaPlayer.setWakeMode(context.applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                bgMediaPlayer.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
+                bgMediaPlayer.setDataSource(directStreamUrl)
+                bgMediaPlayer.prepareAsync()
+                bgMediaPlayer.setOnPreparedListener { mp ->
+                    isPreparingBackgroundMedia = false
+                    isPlayingBackgroundMedia = true
+                    mp.start()
+                    Toast.makeText(context, "🔒 Mode Layar Terkunci Aktif! Suara tetap berjalan walau layar dimatikan.", Toast.LENGTH_LONG).show()
+                }
+                bgMediaPlayer.setOnCompletionListener {
+                    isPlayingBackgroundMedia = false
+                }
+            } catch (e: Exception) {
+                isPreparingBackgroundMedia = false
+                isPlayingBackgroundMedia = false
+            }
+        } else {
+            // Jika berupa Link YouTube (dan belum ada file MP4/MP3 langsung), bacakan isi kajian dengan Suara Narator Background (Tetap hidup saat layar mati!)
+            isPreparingBackgroundMedia = false
+            isPlayingBackgroundMedia = true
+            backgroundMediaTitle = "${item.title} (Mode Audio Narasi)"
+            ttsEngine?.language = Locale("id", "ID")
+            val narration = "Memutar kajian audio: ${item.title}. ${item.description}"
+            ttsEngine?.speak(narration, TextToSpeech.QUEUE_FLUSH, null, "bg_narration")
+            Toast.makeText(context, "🔒 Mode Dengar Audio Aktif! Anda bisa mengunci layar HP sekarang.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun stopBackgroundMedia() {
+        try {
+            if (bgMediaPlayer.isPlaying) bgMediaPlayer.stop()
+            bgMediaPlayer.reset()
+        } catch (_: Exception) {}
+        ttsEngine?.stop()
+        isPlayingBackgroundMedia = false
+        isPreparingBackgroundMedia = false
     }
 
     fun playIqroSound(arabicText: String, latinText: String, rawMediaUrl: String = "") {
@@ -143,16 +214,16 @@ fun DynamicContentScreen(
 
         if (audioUrl.isNotBlank()) {
             try {
-                mediaPlayer.reset()
-                mediaPlayer.setAudioAttributes(
+                bgMediaPlayer.reset()
+                bgMediaPlayer.setAudioAttributes(
                     AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .build()
                 )
-                mediaPlayer.setDataSource(audioUrl)
-                mediaPlayer.prepareAsync()
-                mediaPlayer.setOnPreparedListener { it.start() }
+                bgMediaPlayer.setDataSource(audioUrl)
+                bgMediaPlayer.prepareAsync()
+                bgMediaPlayer.setOnPreparedListener { it.start() }
                 return
             } catch (_: Exception) {}
         }
@@ -204,16 +275,83 @@ fun DynamicContentScreen(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                        } else if (categoryKey == "video") {
+                            Text(
+                                text = "🎬 Putar di Aplikasi & Mode Layar Terkunci 🔒",
+                                color = GoldAccent,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        stopBackgroundMedia()
+                        onBack()
+                    }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Kembali", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = EmeraldDark)
             )
+        },
+        bottomBar = {
+            // BAR PLAYER BACKGROUND (TETAP BERJALAN WALAU LAYAR HP DIKUNCI!)
+            if (isPlayingBackgroundMedia || isPreparingBackgroundMedia) {
+                Surface(
+                    color = EmeraldDark,
+                    shadowElevation = 14.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(color = GoldAccent, shape = CircleShape, modifier = Modifier.size(38.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(20.dp))
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (isPreparingBackgroundMedia) "Memuat Audio Background..."
+                                    else "🔒 Tetap Hidup Saat Layar Terkunci",
+                                    color = GoldAccent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                                Text(
+                                    text = backgroundMediaTitle,
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { stopBackgroundMedia() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Stop", tint = Color.White, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Stop", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
         }
     ) { padding ->
         Column(
@@ -222,6 +360,21 @@ fun DynamicContentScreen(
                 .background(OffWhiteBg)
                 .padding(padding)
         ) {
+            // PEMUTAR VIDEO IN-APP (TERBUKA LANGSUNG DI DALAM APLIKASI TANPA KELUAR!)
+            AnimatedVisibility(visible = activeInAppVideoItem != null) {
+                activeInAppVideoItem?.let { playingItem ->
+                    InAppUniversalVideoPlayerBox(
+                        item = playingItem,
+                        onSwitchToLockScreenAudio = {
+                            val itemToBg = playingItem
+                            activeInAppVideoItem = null
+                            playBackgroundLockScreenMedia(itemToBg)
+                        },
+                        onClosePlayer = { activeInAppVideoItem = null }
+                    )
+                }
+            }
+
             if (categoryKey == "iqro") {
                 Row(
                     modifier = Modifier
@@ -342,7 +495,6 @@ fun DynamicContentScreen(
                 if (isLoading) {
                     CircularProgressIndicator(color = EmeraldPrimary, modifier = Modifier.align(Alignment.Center))
                 } else if (categoryKey == "iqro" && iqroTabMode == 0) {
-                    // TAB 0: 36+ KARTU IQRO JILID 1-6 + TOMBOL PENANDA MENGAJI
                     val jilidItems = remember(items, selectedJilid) {
                         items.filter { it.jilidLevel == selectedJilid || (selectedJilid == 1 && it.id < 900) }
                     }
@@ -368,7 +520,6 @@ fun DynamicContentScreen(
                         }
                     }
                 } else if (categoryKey == "iqro" && iqroTabMode == 1) {
-                    // TAB 1: GENERATOR LATIHAN MEMBACA IQRO 1-6
                     IqroReadingSheetGeneratorView(
                         selectedJilid = selectedJilid,
                         onNextJilid = {
@@ -377,7 +528,6 @@ fun DynamicContentScreen(
                         onPlaySound = { arab, latin -> playIqroSound(arab, latin) }
                     )
                 } else if (categoryKey == "iqro" && iqroTabMode == 2) {
-                    // TAB 2: PAPAN 30 HURUF HIJAIYAH
                     val hijaiyahList = remember { get30HijaiyahSoundCards() }
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
@@ -410,90 +560,250 @@ fun DynamicContentScreen(
                         }
                     }
                 } else {
+                    // DAFTAR VIDEO & MATERI DENGAN DESKRIPSI TERTUTUP DEFAULT + IN-APP VIDEO PLAYER
                     LazyColumn(
                         contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         items(items, key = { it.id }) { item ->
-                            val isFaq = categoryKey == "faq"
-                            val isExpanded = expandedFaqIds[item.id] ?: !isFaq
-                            val imagePart = extractImageUrl(item.mediaUrl)
+                            val isVideoCategory = categoryKey == "video" ||
+                                    extractYoutubeVideoId(item.mediaUrl) != null ||
+                                    item.mediaUrl.contains(".mp4", ignoreCase = true)
+
+                            // DESKRIPSI DEFAULT TERTUTUP (false) -> Baru muncul saat diklik "Buka Deskripsi"!
+                            val isDescOpen = expandedDescriptionIds[item.id] ?: false
+                            val previewBannerUrl = extractMediaPreviewUrl(item.mediaUrl)
 
                             Card(
-                                shape = RoundedCornerShape(22.dp),
+                                shape = RoundedCornerShape(24.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable(enabled = isFaq) { expandedFaqIds[item.id] = !isExpanded }
+                                    .border(1.dp, MintSurface, RoundedCornerShape(24.dp))
                             ) {
-                                Column(modifier = Modifier.padding(18.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = item.title,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 16.sp,
-                                            color = EmeraldDark,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (isFaq) {
-                                            Icon(
-                                                imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                                contentDescription = null,
-                                                tint = EmeraldPrimary
-                                            )
-                                        } else if (item.arabicText.isNotBlank()) {
-                                            FilledTonalIconButton(
-                                                onClick = { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) }
-                                            ) {
-                                                Icon(Icons.Default.VolumeUp, contentDescription = "Suara", tint = EmeraldDark)
+                                Column {
+                                    // 1. BANNER VISUAL VIDEO / GAMBAR (KLIK LANGSUNG PUTAR DI DALAM APLIKASI!)
+                                    if (previewBannerUrl.isNotBlank() || isVideoCategory) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(16f / 9f)
+                                                .background(Brush.linearGradient(listOf(EmeraldDark, EmeraldPrimary)))
+                                                .clickable {
+                                                    if (isVideoCategory) {
+                                                        stopBackgroundMedia()
+                                                        activeInAppVideoItem = item
+                                                    }
+                                                }
+                                        ) {
+                                            if (previewBannerUrl.isNotBlank()) {
+                                                NetworkImageLoader(
+                                                    imageUrl = previewBannerUrl,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                MosqueSilhouetteOrnamentCanvas(
+                                                    accentColor = GoldAccent,
+                                                    modifier = Modifier.matchParentSize()
+                                                )
+                                            }
+
+                                            if (isVideoCategory) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(Color.Black.copy(alpha = 0.30f))
+                                                )
+                                                Surface(
+                                                    color = Color(0xFFE11D48),
+                                                    shape = CircleShape,
+                                                    shadowElevation = 8.dp,
+                                                    modifier = Modifier
+                                                        .size(64.dp)
+                                                        .border(2.5.dp, Color.White, CircleShape)
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.PlayArrow,
+                                                            contentDescription = "Putar di Aplikasi",
+                                                            tint = Color.White,
+                                                            modifier = Modifier.size(36.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Surface(
+                                                    color = Color.Black.copy(alpha = 0.75f),
+                                                    shape = RoundedCornerShape(50),
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomEnd)
+                                                        .padding(12.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "▶ Putar Langsung di Aplikasi",
+                                                        color = GoldAccent,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
 
-                                    AnimatedVisibility(visible = isExpanded) {
-                                        Column {
-                                            if (imagePart.isNotBlank()) {
-                                                Spacer(modifier = Modifier.height(12.dp))
-                                                NetworkImageLoader(
-                                                    imageUrl = imagePart,
-                                                    modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(16.dp))
-                                                )
-                                            }
-                                            if (item.arabicText.isNotBlank()) {
-                                                Spacer(modifier = Modifier.height(12.dp))
+                                    // 2. BAGIAN JUDUL & TOMBOL KONTROL
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                if (isVideoCategory && item.latinText.isNotBlank()) {
+                                                    Text(
+                                                        text = "📺 ${item.latinText}",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        color = EmeraldPrimary
+                                                    )
+                                                    Spacer(modifier = Modifier.height(2.dp))
+                                                }
                                                 Text(
-                                                    text = item.arabicText,
-                                                    fontSize = 28.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = EmeraldDark,
-                                                    textAlign = TextAlign.End,
-                                                    modifier = Modifier.fillMaxWidth()
+                                                    text = item.title,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    fontSize = 16.sp,
+                                                    color = EmeraldDark
                                                 )
                                             }
-                                            if (item.latinText.isNotBlank()) {
-                                                Spacer(modifier = Modifier.height(6.dp))
-                                                Text(item.latinText, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = EmeraldPrimary)
+
+                                            if (item.arabicText.isNotBlank()) {
+                                                FilledTonalIconButton(
+                                                    onClick = { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) }
+                                                ) {
+                                                    Icon(Icons.Default.VolumeUp, contentDescription = "Suara", tint = EmeraldDark)
+                                                }
                                             }
+                                        }
+
+                                        // Teks Arab & Latin selalu tampil untuk Doa/Tajwid/Belajar agar mudah dibaca
+                                        if (item.arabicText.isNotBlank()) {
                                             Spacer(modifier = Modifier.height(10.dp))
-                                            Text(item.description, fontSize = 14.sp, color = Color(0xFF334155), lineHeight = 21.sp)
-                                            if (item.mediaUrl.isNotBlank() && imagePart.isBlank()) {
-                                                Spacer(modifier = Modifier.height(12.dp))
+                                            Text(
+                                                text = item.arabicText,
+                                                fontSize = 26.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = EmeraldDark,
+                                                textAlign = TextAlign.End,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                        if (!isVideoCategory && item.latinText.isNotBlank()) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text(item.latinText, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = EmeraldPrimary)
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // BARIS TOMBOL AKSI: PUTAR IN-APP, MODE LAYAR TERKUNCI, & BUKA DESKRIPSI
+                                        if (isVideoCategory) {
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
                                                 Button(
                                                     onClick = {
-                                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.mediaUrl))
-                                                        context.startActivity(intent)
+                                                        stopBackgroundMedia()
+                                                        activeInAppVideoItem = item
                                                     },
                                                     colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                                                    shape = RoundedCornerShape(12.dp)
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                                    modifier = Modifier.weight(1f)
                                                 ) {
-                                                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                    Text("Putar Video / Buka Materi")
+                                                    Icon(Icons.Default.PlayCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(5.dp))
+                                                    Text("Putar Video", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                                                }
+
+                                                Button(
+                                                    onClick = {
+                                                        activeInAppVideoItem = null
+                                                        playBackgroundLockScreenMedia(item)
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(15.dp))
+                                                    Spacer(modifier = Modifier.width(5.dp))
+                                                    Text("Layar Mati (Audio)", color = Color(0xFF0F172A), fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                        }
+
+                                        // TOMBOL BUKA / TUTUP DESKRIPSI
+                                        Surface(
+                                            color = if (isDescOpen) EmeraldDark else MintSurface,
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { expandedDescriptionIds[item.id] = !isDescOpen }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = if (isDescOpen) "📖 Tutup Deskripsi & Penjelasan" else "📖 Buka Deskripsi & Penjelasan",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = if (isDescOpen) GoldAccent else EmeraldDark
+                                                )
+                                                Icon(
+                                                    imageVector = if (isDescOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                                    contentDescription = null,
+                                                    tint = if (isDescOpen) GoldAccent else EmeraldDark
+                                                )
+                                            }
+                                        }
+
+                                        // ISI DESKRIPSI (BARU MUNCUL KETIKA DITEKAN!)
+                                        AnimatedVisibility(visible = isDescOpen) {
+                                            Column(modifier = Modifier.padding(top = 10.dp)) {
+                                                Surface(
+                                                    color = OffWhiteBg,
+                                                    shape = RoundedCornerShape(14.dp),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .border(1.dp, MintSurface, RoundedCornerShape(14.dp))
+                                                ) {
+                                                    Column(modifier = Modifier.padding(14.dp)) {
+                                                        Text(
+                                                            text = item.description.ifBlank { "Tidak ada deskripsi tambahan." },
+                                                            fontSize = 14.sp,
+                                                            color = Color(0xFF1E293B),
+                                                            lineHeight = 21.sp
+                                                        )
+                                                        if (item.mediaUrl.isNotBlank()) {
+                                                            Spacer(modifier = Modifier.height(10.dp))
+                                                            TextButton(
+                                                                onClick = {
+                                                                    try {
+                                                                        val cleanUrl = item.mediaUrl.split("|").last { it.isNotBlank() }
+                                                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cleanUrl)))
+                                                                    } catch (_: Exception) {}
+                                                                }
+                                                            ) {
+                                                                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+                                                                Spacer(modifier = Modifier.width(4.dp))
+                                                                Text("Buka di Aplikasi YouTube Eksternal ↗", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -509,7 +819,7 @@ fun DynamicContentScreen(
 
     if (zoomedContent != null) {
         val item = zoomedContent!!
-        val imagePart = extractImageUrl(item.mediaUrl)
+        val imagePart = extractMediaPreviewUrl(item.mediaUrl)
         AlertDialog(
             onDismissRequest = { zoomedContent = null },
             title = { Text(item.title, fontWeight = FontWeight.ExtraBold, color = EmeraldDark, fontSize = 16.sp) },
@@ -581,6 +891,151 @@ fun DynamicContentScreen(
                 TextButton(onClick = { zoomedContent = null }) { Text("Tutup 🌟", fontWeight = FontWeight.Bold) }
             }
         )
+    }
+}
+
+// =========================================================================
+// KOMPONEN PEMUTAR VIDEO LANGSUNG DI DALAM APLIKASI (IN-APP PLAYER)
+// =========================================================================
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun InAppUniversalVideoPlayerBox(
+    item: ServerContent,
+    onSwitchToLockScreenAudio: () -> Unit,
+    onClosePlayer: () -> Unit
+) {
+    val cleanUrl = remember(item.mediaUrl) {
+        item.mediaUrl.split("|").lastOrNull { it.isNotBlank() } ?: ""
+    }
+    val ytId = remember(cleanUrl) { extractYoutubeVideoId(cleanUrl) }
+
+    val embedHtml = remember(ytId, cleanUrl) {
+        if (ytId != null) {
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>body,html{margin:0;padding:0;background:#000;height:100%;overflow:hidden;} iframe{width:100%;height:100%;border:0;}</style>
+            </head>
+            <body>
+                <iframe src="https://www.youtube.com/embed/$ytId?autoplay=1&playsinline=1&rel=0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>
+            </body>
+            </html>
+            """.trimIndent()
+        } else {
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>body,html{margin:0;padding:0;background:#000;height:100%;display:flex;align-items:center;justify-content:center;} video{width:100%;height:100%;}</style>
+            </head>
+            <body>
+                <video src="$cleanUrl" controls autoplay playsinline></video>
+            </body>
+            </html>
+            """.trimIndent()
+        }
+    }
+
+    Card(
+        shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            // Bar Atas Player
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(EmeraldDark)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "🎬 Memutar: ${item.title}",
+                    color = GoldAccent,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = Color(0xFFE11D48),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.clickable { onClosePlayer() }
+                ) {
+                    Text(
+                        text = "✕ Tutup Video",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Layar Video 16:9 di Dalam Aplikasi
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        settings.javaScriptEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.domStorageEnabled = true
+                        settings.cacheMode = WebSettings.LOAD_DEFAULT
+                        webChromeClient = WebChromeClient()
+                        webViewClient = WebViewClient()
+                        keepScreenOn = true
+                        loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "utf-8", null)
+                    }
+                },
+                update = { webView ->
+                    webView.loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "utf-8", null)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+            )
+
+            // Tombol Pintas Beralih ke Mode Layar Terkunci
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E293B))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Ingin mematikan layar HP sambil tetap mendengar?",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    color = GoldAccent,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.clickable { onSwitchToLockScreenAudio() }
+                ) {
+                    Text(
+                        text = "🔒 Aktifkan Mode Layar Mati",
+                        color = Color(0xFF0F172A),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -810,7 +1265,7 @@ fun IqroVisualSoundCard(
     onBookmarkClick: () -> Unit,
     onZoomClick: () -> Unit
 ) {
-    val imagePart = extractImageUrl(item.mediaUrl)
+    val imagePart = extractMediaPreviewUrl(item.mediaUrl)
     val iqroPandaBitmap = rememberOptimizedIcon(R.drawable.ic_menu_iqro, 90)
 
     Card(
@@ -866,7 +1321,6 @@ fun IqroVisualSoundCard(
                     }
                 }
 
-                // Tombol Tandai Batas Mengaji di Pojok Kiri Atas Kartu
                 Surface(
                     color = if (isBookmarked) Color(0xFFD97706) else Color.White.copy(alpha = 0.9f),
                     shape = CircleShape,
@@ -886,7 +1340,6 @@ fun IqroVisualSoundCard(
                     }
                 }
 
-                // Ikon Suara di Pojok Kanan Atas Kartu
                 Surface(
                     color = GoldAccent,
                     shape = CircleShape,
@@ -959,52 +1412,6 @@ fun HijaiyahInteractiveTile(
     }
 }
 
-fun extractImageUrl(rawMediaUrl: String): String {
-    val parts = rawMediaUrl.split("|")
-    return parts.find { it.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)$", RegexOption.IGNORE_CASE)) } ?: ""
-}
-
-@Composable
-fun NetworkImageLoader(imageUrl: String, modifier: Modifier = Modifier) {
-    var bitmap by remember(imageUrl) { mutableStateOf<Bitmap?>(null) }
-    var isFailed by remember(imageUrl) { mutableStateOf(false) }
-
-    LaunchedEffect(imageUrl) {
-        withContext(Dispatchers.IO) {
-            try {
-                val url = URL(imageUrl)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 7000
-                conn.readTimeout = 7000
-                conn.doInput = true
-                conn.connect()
-                bitmap = BitmapFactory.decodeStream(conn.inputStream)
-            } catch (_: Exception) {
-                isFailed = true
-            }
-        }
-    }
-
-    Box(contentAlignment = Alignment.Center, modifier = modifier.background(MintSurface)) {
-        when {
-            bitmap != null -> {
-                Image(
-                    bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            isFailed -> {
-                Text("📗", fontSize = 32.sp)
-            }
-            else -> {
-                CircularProgressIndicator(color = EmeraldPrimary, modifier = Modifier.size(26.dp))
-            }
-        }
-    }
-}
-
 fun get30HijaiyahSoundCards(): List<HijaiyahSoundCard> {
     val colors = listOf(
         Color(0xFFFEF9C3), Color(0xFFD1FAE5), Color(0xFFE0F2FE),
@@ -1060,42 +1467,9 @@ fun get30HijaiyahSoundCards(): List<HijaiyahSoundCard> {
     }
 }
 
-suspend fun fetchContentsFromServer(category: String): List<ServerContent> = withContext(Dispatchers.IO) {
-    val resultList = mutableListOf<ServerContent>()
-    try {
-        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=get_contents&category=$category")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        if (conn.responseCode == 200) {
-            val response = conn.inputStream.bufferedReader().readText()
-            val jsonObj = JSONObject(response)
-            val dataArray = jsonObj.getJSONArray("data")
-            for (i in 0 until dataArray.length()) {
-                val obj = dataArray.getJSONObject(i)
-                resultList.add(
-                    ServerContent(
-                        id = obj.getInt("id"),
-                        title = obj.getString("title"),
-                        arabicText = obj.optString("arabic_text", ""),
-                        latinText = obj.optString("latin_text", ""),
-                        description = obj.optString("description", ""),
-                        mediaUrl = obj.optString("media_url", ""),
-                        jilidLevel = 1
-                    )
-                )
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    resultList
-}
-
-// 36+ Kartu Iqro Lengkap dari Jilid 1 sampai Jilid 6!
 fun getBuiltInFallbackContents(category: String): List<ServerContent> {
     return when (category) {
         "iqro" -> listOf(
-            // JILID 1 (8 Kartu Lengkap Seluruh Huruf Tunggal Fathah)
             ServerContent(901, "Iqro 1 • Hal 1 (Alif - Ba)", "أَ   بَ", "A  —  Ba", "Mulut terbuka saat 'A' dan bibir merapat saat 'Ba'.", "", 1),
             ServerContent(902, "Iqro 1 • Hal 2 (Ba - Ta - Tsa)", "بَ   تَ   ثَ", "Ba — Ta — Tsa", "Titik satu di bawah Ba, titik dua di atas Ta, titik tiga di atas Tsa.", "", 1),
             ServerContent(903, "Iqro 1 • Hal 3 (Jim - Ha - Kho)", "جَ   حَ   خَ", "Ja — Ha — Kho", "Jim bertitik di tengah, Ha bersih di tenggorokan, Kho sedikit bergetar.", "", 1),
@@ -1104,40 +1478,30 @@ fun getBuiltInFallbackContents(category: String): List<ServerContent> {
             ServerContent(906, "Iqro 1 • Hal 6 (Sin - Syin)", "سَ   شَ   سَحَ", "Sa — Sya — Sa-Ha", "Bedakan desis tipis Sin (Sa) dan hembusan lebar Syin (Sya).", "", 1),
             ServerContent(907, "Iqro 1 • Hal 7 (Shod - Dhod - Tho - Zho)", "صَ   ضَ   طَ   ظَ", "Sho — Dho — Tho — Zho", "Keempat huruf ini dibaca tebal (Isti'la) memenuhi rongga mulut.", "", 1),
             ServerContent(908, "Iqro 1 • Hal 8 (Ain s/d Ya)", "عَ  غَ  فَ  قَ  كَ  لَ  مَ  نَ  وَ  هَ  يَ", "'A - Gho - Fa - Qo - Ka - La - Ma - Na - Wa - Ha - Ya", "Penutup Iqro Jilid 1! Pastikan semua huruf Fathah terbaca tegas.", "", 1),
-
-            // JILID 2 (6 Kartu Lengkap Huruf Sambung & Mad Fathah Panjang)
             ServerContent(921, "Iqro 2 • Hal 1 (Sambung Ba-Ta)", "بَتَ   تَبَ", "Ba-Ta  —  Ta-Ba", "Mengenal bentuk huruf Ba dan Ta ketika disambung.", "", 2),
             ServerContent(922, "Iqro 2 • Hal 2 (Sambung 3 Huruf)", "نَبَتَ   ثَبَتَ", "Na-Ba-Ta — Tsa-Ba-Ta", "Bacalah pendek setiap huruf yang disambung.", "", 2),
             ServerContent(923, "Iqro 2 • Hal 3 (Sambung Jim-Ha-Kho)", "جَحَدَ   خَرَجَ", "Ja-Ha-Da — Kho-Ro-Ja", "Kepala huruf Jim, Ha, Kho tetap terlihat jelas saat disambung.", "", 2),
             ServerContent(924, "Iqro 2 • Hal 4 (Sambung Ain-Ghain-Fa-Qof)", "عَمَلَ   فَتَحَ", "'A-Ma-La — Fa-Ta-Ha", "Perhatikan bentuk huruf Ain dan Fa ketika berada di awal kata.", "", 2),
             ServerContent(925, "Iqro 2 • Hal 5 (Mad Panjang Alif)", "بَا   تَا   مَا   لاَ", "Baa — Taa — Maa — Laa", "Setiap Fathah diikuti Alif mati wajib dipanjangkan 2 harakat.", "", 2),
             ServerContent(926, "Iqro 2 • Hal 6 (Ayat Pendek vs Panjang)", "كَتَبَ   كَاتَبَ   صَدَقَ   صَادَقَ", "Ka-Ta-Ba  vs  Kaa-Ta-Ba", "Ujian Iqro 2: Jangan memanjangkan huruf yang tidak memiliki Alif!", "", 2),
-
-            // JILID 3 (6 Kartu Lengkap Kasrah, Dhammah & Mad Ya/Wawu)
             ServerContent(931, "Iqro 3 • Hal 1 (Baris Kasrah i-bi-ti)", "إِ   بِ   تِ   ثِ", "I — Bi — Ti — Tsi", "Garis di bawah huruf menghasilkan bunyi vokal 'i' pendek.", "", 3),
             ServerContent(932, "Iqro 3 • Hal 2 (Latihan Kata Kasrah)", "عَمِلَ   سَمِعَ   حَمِدَ", "'A-Mi-La — Sa-Mi-'A — Ha-Mi-Da", "Jaga agar huruf Kasrah tidak memantul atau miring ke bunyi 'e'.", "", 3),
             ServerContent(933, "Iqro 3 • Hal 3 (Mad Ya Sukun Panjang)", "بِي   تِي   فِيهِ   دِينِي", "Bii — Tii — Fii-Hi — Dii-Nii", "Kasrah diikuti Ya sukun dibaca panjang 2 harakat.", "", 3),
             ServerContent(934, "Iqro 3 • Hal 4 (Baris Dhammah u-bu-tu)", "أُ   بُ   تُ   ثُ", "U — Bu — Tu — Tsu", "Bibirmu maju membulat saat mengucapkan baris Dhammah (u).", "", 3),
             ServerContent(935, "Iqro 3 • Hal 5 (Kata Gabungan 3 Harakat)", "كُتِبَ   قُرِئَ   فُتِحَ", "Ku-Ti-Ba — Qu-Ri-A — Fu-Ti-Ha", "Gabungan Dhammah, Kasrah, dan Fathah dalam satu kata.", "", 3),
             ServerContent(936, "Iqro 3 • Hal 6 (Mad Wawu Sukun Panjang)", "بُو   تُو   يَقُولُ   رَسُولُ", "Buu — Tuu — Ya-Quu-Lu — Ro-Suu-Lu", "Dhammah diikuti Wawu sukun dibaca panjang 2 harakat.", "", 3),
-
-            // JILID 4 (6 Kartu Lengkap Tanwin, Sukun & Qalqalah)
             ServerContent(941, "Iqro 4 • Hal 1 (Fathatain -an)", "بً   تً   كِتَابًا   هُدًى", "Ban — Tan — Ki-Taa-Ban — Hu-Dan", "Baris dua di atas berbunyi '-an'.", "", 4),
             ServerContent(942, "Iqro 4 • Hal 2 (Kasratain -in)", "بٍ   تٍ   عَلِيمٍ   حَكِيمٍ", "Bin — Tin — 'A-Lii-Min — Ha-Kii-Min", "Baris dua di bawah berbunyi '-in'.", "", 4),
             ServerContent(943, "Iqro 4 • Hal 3 (Dhammatain -un)", "بٌ   تٌ   أَحَدٌ   صَمَدٌ", "Bun — Tun — A-Ha-Dun — Sho-Ma-Dun", "Dhammah rangkap di atas berbunyi '-un'.", "", 4),
             ServerContent(944, "Iqro 4 • Hal 4 (Huruf Sukun / Mati)", "أَمْ   أَنْ   يَعْلَمُونَ   مَسْجِدٌ", "Am — An — Ya'lamuuna — Masjidun", "Huruf bertanda Sukun dimatikan tanpa memantul (kecuali Qalqalah).", "", 4),
             ServerContent(945, "Iqro 4 • Hal 5 (Pantulan Qalqalah)", "أَبْ   أَجْ   أَدْ   أَقْ   أَطْ", "Ab' — Aj' — Ad' — Aq' — Ath'", "5 Huruf Qalqalah (ق ط ب ج د) wajib dipantulkan saat sukun.", "", 4),
             ServerContent(946, "Iqro 4 • Hal 6 (Ujian Evaluasi Jilid 4)", "أَنْعَمْتَ   الْمَغْضُوبِ   يَكْسِبُونَ", "An-'Am-Ta — Al-Magh-Dhuu-Bi", "Pastikan Sukun dan Qalqalah terdengar beda dengan jelas!", "", 4),
-
-            // JILID 5 (6 Kartu Lengkap Alif Lam, Tasydid, Ghunnah & Waqaf)
             ServerContent(951, "Iqro 5 • Hal 1 (Alif Lam Qamariyah)", "الْقَمَرُ   الْحَمْدُ   الْعَالَمِينَ", "Al-Qamaru — Al-Hamdu — Al-'Aalamiina", "Huruf Lam sukun dibaca jelas.", "", 5),
             ServerContent(952, "Iqro 5 • Hal 2 (Alif Lam Syamsiyah)", "الشَّمْسُ   الرَّحْمَنُ   النَّاسِ", "Asy-Syamsu — Ar-Rahmaanu — An-Naasi", "Huruf Lam lebur langsung ke huruf bertasydid di depannya.", "", 5),
             ServerContent(953, "Iqro 5 • Hal 3 (Huruf Bertasydid)", "رَبِّ   قُدِّرَ   سُبِّحَ   إِيَّاكَ", "Rab-bi — Qud-dira — Sub-biha — Iy-yaaka", "Tahan dan tekan kuat huruf yang memiliki tanda Tasydid (ّ).", "", 5),
             ServerContent(954, "Iqro 5 • Hal 4 (Ghunnah Nun & Mim Tasydid)", "إِنَّ   عَمَّ   جَنَّةٌ   ثُمَّ", "In-na — 'Am-ma — Jan-natun — Tsum-ma", "Wajib ditahan dengungnya selama 2 harakat penuh!", "", 5),
             ServerContent(955, "Iqro 5 • Hal 5 (Lafadz Allah / Jalalah)", "بِسْمِ اللَّهِ   مِنَ اللَّهِ   رَسُولُ اللَّهِ", "Bismillaahi (Tipis) vs Minallaahi (Tebal)", "Dibaca tipis (Lillaah) setelah Kasrah, dan tebal (Allaah) setelah Fathah/Dhammah.", "", 5),
             ServerContent(956, "Iqro 5 • Hal 6 (Cara Waqaf / Berhenti)", "تَعْلَمُونَ ۝   أَحَدٌ ۝   الْفَلَقِ ۝", "Ta'lamuun — Ahad' — Al-Falaq'", "Huruf terakhir dimatikan ketika berhenti di akhir ayat.", "", 5),
-
-            // JILID 6 (6 Kartu Lengkap Idgham, Iqlab, Ikhfa & Tanda Waqaf)
             ServerContent(961, "Iqro 6 • Hal 1 (Idgham Bighunnah)", "مَنْ يَقُولُ   مِنْ مَالٍ   مِنْ نِعْمَةٍ", "May-yaquulu — Mim-maalin — Min-ni'matin", "Nun mati/Tanwin bertemu ي ن م و dileburkan disertai dengung.", "", 6),
             ServerContent(962, "Iqro 6 • Hal 2 (Idgham Bilaghunnah)", "مِنْ رَبِّهِمْ   غَفُورٌ رَحِيمٌ   مِنْ لَدُنْهُ", "Mir-rabbihim — Ghafuurur-rahiim", "Nun mati/Tanwin bertemu Lam (ل) atau Ro (ر) melebur jelas tanpa dengung.", "", 6),
             ServerContent(963, "Iqro 6 • Hal 3 (Hukum Iqlab)", "مِنْ بَعْدِ   سَمِيعٌ بَصِيرٌ   لَيُنْبَذَنَّ", "Mim-ba'di — Samii'um-bashiir", "Nun mati/Tanwin bertemu Ba (ب) berubah menjadi bunyi Mim dengung.", "", 6),
@@ -1145,13 +1509,16 @@ fun getBuiltInFallbackContents(category: String): List<ServerContent> {
             ServerContent(965, "Iqro 6 • Hal 5 (Huruf Muqaththa'ah Awal Surah)", "الم   يس   طه   حم", "Alif-Laam-Miim — Yaa-Siin — Thoo-Haa", "Dibaca nama asli hurufnya dengan panjang Mad Lazim (6 harakat).", "", 6),
             ServerContent(966, "Iqro 6 • Hal 6 (Kelulusan Iqro 6)", "قُلْ هُوَ اللَّهُ أَحَدٌ ۝ اللَّهُ الصَّمَدُ ۝", "Qul huwallaahu ahad' — Allaahush-shomad'", "Alhamdulillah! Anda telah menamatkan seluruh kurikulum Iqro 1–6.", "", 6)
         )
+        "video" -> listOf(
+            ServerContent(401, "Belajar Huruf Hijaiyah & Makhraj Ceria Bersama Anak", "", "Animasi Edukasi Anak Sholeh", "Video belajar melafalkan 28 huruf Hijaiyah dengan lagu dan animasi yang mudah diingat anak-anak. Tekan tombol 'Layar Mati (Audio)' jika ingin mendengarkan suaranya saat layar HP terkunci.", "https://www.youtube.com/watch?v=1t4sM2xefCc"),
+            ServerContent(402, "Kisah Teladan Nabi Ibrahim AS & Burung Pipit", "", "Kisah 25 Nabi & Rasul", "Kisah inspiratif keberanian Nabi Ibrahim AS ketika menghadapi Raja Namrud dan kesetiaan burung pipit kecil yang membantu memadamkan api.", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")
+        )
         "belajar" -> listOf(
             ServerContent(101, "5 Rukun Islam & Penjelasannya", "بُنِيَ الإِسْلاَمُ عَلَى خَمْسٍ", "Buniyal islaamu 'alaa khamsin", "1. Mengucapkan Dua Kalimat Syahadat\n2. Mendirikan Sholat 5 Waktu\n3. Menunaikan Zakat\n4. Berpuasa di Bulan Ramadhan\n5. Menunaikan Ibadah Haji bagi yang mampu.", ""),
             ServerContent(102, "6 Rukun Iman yang Wajib Diyakini", "أَنْ تُؤْمِنَ بِاللَّهِ وَمَلَائِكَتِهِ", "An tu'mina billaahi wa malaa'ikatihi...", "1. Iman kepada Allah SWT\n2. Iman kepada Malaikat Allah\n3. Iman kepada Kitab-Kitab Allah\n4. Iman kepada Rasul-Rasul Allah\n5. Iman kepada Hari Kiamat\n6. Iman kepada Qada dan Qadar.", "")
         )
         "faq" -> listOf(
-            ServerContent(201, "❓ Bagaimana cara menandai batas mengaji di Al-Quran & Iqro?", "", "", "Ketuk ikon Pita Penanda (🔖) pada kartu ayat Al-Quran atau kartu Iqro. Batas mengaji Anda langsung tampil di Beranda Utama dan tersimpan ke server!", ""),
-            ServerContent(202, "❓ Bagaimana cara membuka Panel Admin dari Aplikasi Android?", "", "", "Klik tombol '🔐 Login Google / Email' di kiri atas Beranda, lalu login menggunakan email admin@pandamuslim.pandakode-dev.my.id dan password humairoh26. Tombol '👑 Panel Admin' akan langsung muncul!", "")
+            ServerContent(201, "❓ Bagaimana cara menonton video langsung di aplikasi & mode layar mati?", "", "", "Buka menu Video -> Ketuk tombol 'Putar Video' untuk menonton langsung di dalam aplikasi, atau ketuk tombol 'Layar Mati (Audio)' agar kajian tetap bersuara meskipun layar HP Anda dikunci!", "")
         )
         "tajwid" -> listOf(
             ServerContent(301, "1. Izhar Halqi (Jelas)", "مَنْ آمَنَ", "Man aamana", "Apabila Nun Sukun atau Tanwin bertemu salah satu huruf tenggorokan (ء هـ ع ح غ خ), maka dibaca jelas tanpa dengung.", "")

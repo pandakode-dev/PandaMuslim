@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.location.Geocoder
 import android.location.LocationManager
@@ -77,7 +78,7 @@ fun rememberOptimizedIcon(@DrawableRes resId: Int, targetPx: Int = 140): ImageBi
             }
             val decodeOpts = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
-                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                inPreferredConfig = Bitmap.Config.RGB_565
             }
             BitmapFactory.decodeResource(context.resources, resId, decodeOpts).asImageBitmap()
         }
@@ -93,6 +94,14 @@ data class HomeBannerSlide(
     val arabicText: String,
     val subtitle: String,
     val imageUrl: String = ""
+)
+
+data class ExtraFeatureCardItem(
+    val routeKey: String,
+    @DrawableRes val iconRes: Int,
+    val title: String,
+    val subtitle: String,
+    val bgColor: Color
 )
 
 @Composable
@@ -166,7 +175,7 @@ fun PandaMuslimHomeScreen(
                     title = b.title,
                     arabicText = b.arabicText,
                     subtitle = b.description,
-                    imageUrl = extractImageUrl(b.mediaUrl)
+                    imageUrl = extractMediaPreviewUrl(b.mediaUrl)
                 )
             }
             bannerSlides = mapped + defaultBanners
@@ -420,6 +429,7 @@ fun PandaMuslimHomeScreen(
 
         item(key = "bottom_sections") {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                // ZONA PINTAR & EDUKASI MENGGUNAKAN 6 IKON DRAWABLE BARU ANDA!
                 SixNewFeaturesGridSection(
                     theme = currentTheme,
                     onSelectFeature = { route -> onMenuClick(route) }
@@ -519,6 +529,95 @@ fun PandaMuslimHomeScreen(
             },
             onDismiss = { showCityPickerDialog = false }
         )
+    }
+}
+
+// =========================================================================
+// ZONA PINTAR & PERMAINAN EDUKASI DENGAN 6 IKON PANDA 3D DARI DRAWABLE
+// =========================================================================
+@Composable
+fun SixNewFeaturesGridSection(
+    theme: KidsAppTheme,
+    onSelectFeature: (String) -> Unit
+) {
+    val extraFeatures = remember {
+        listOf(
+            ExtraFeatureCardItem("KisahNabi", R.drawable.ic_menu_kisah_nabi, "Kisah 25 Nabi", "Audio Dongeng Teladan", Color(0xFFFEF3C7)),
+            ExtraFeatureCardItem("KuisIslami", R.drawable.ic_menu_kuis_islami, "Kuis Pintar", "Game Tebak Ayat & Asmaul", Color(0xFFD1FAE5)),
+            ExtraFeatureCardItem("KalenderHijriah", R.drawable.ic_menu_kalender_hijriah, "Celengan Amal", "Kalender Hijriah & Bintang", Color(0xFFE0F2FE)),
+            ExtraFeatureCardItem("KamusHalal", R.drawable.ic_menu_kamus_halal, "Kamus Halal", "Cek Bahan & Kode Makanan", Color(0xFFFCE7F3)),
+            ExtraFeatureCardItem("TanyaPanda", R.drawable.ic_menu_tanya_panda, "Tanya Kak Panda", "Chat Tanya Jawab Anak", Color(0xFFEDE9FE)),
+            ExtraFeatureCardItem("PialaSertifikat", R.drawable.ic_menu_sertifikat, "Piala & Piagam", "Cetak Sertifikat Anak Sholeh", Color(0xFFFFEDD5))
+        ).chunked(2)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionTitleWithOrnament(title = "🌟 Zona Pintar & Permainan Edukasi", theme = theme)
+        Spacer(modifier = Modifier.height(2.dp))
+
+        extraFeatures.forEach { rowPair ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                rowPair.forEach { feat ->
+                    val iconBitmap = rememberOptimizedIcon(feat.iconRes, 130)
+
+                    Card(
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .border(1.dp, theme.surfaceColor, RoundedCornerShape(22.dp))
+                            .clickable { onSelectFeature(feat.routeKey) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(feat.bgColor)
+                                    .padding(3.dp)
+                            ) {
+                                Image(
+                                    bitmap = iconBitmap,
+                                    contentDescription = feat.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(14.dp))
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = feat.title,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 13.sp,
+                                    color = theme.headerBg,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = feat.subtitle,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.Gray,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1194,86 +1293,6 @@ fun MengajiBookmarkTrackerCard(
 }
 
 @Composable
-fun SixNewFeaturesGridSection(
-    theme: KidsAppTheme,
-    onSelectFeature: (String) -> Unit
-) {
-    val extraFeatures = remember {
-        listOf(
-            ExtraFeatureCardItem("KisahNabi", "📖", "Kisah 25 Nabi", "Audio Dongeng Teladan", Color(0xFFFEF3C7)),
-            ExtraFeatureCardItem("KuisIslami", "🎮", "Kuis Pintar", "Game Tebak Ayat & Asmaul", Color(0xFFD1FAE5)),
-            ExtraFeatureCardItem("KalenderHijriah", "🌙", "Celengan Amal", "Kalender Hijriah & Bintang", Color(0xFFE0F2FE)),
-            ExtraFeatureCardItem("KamusHalal", "🍜", "Kamus Halal", "Cek Bahan & Kode Makanan", Color(0xFFFCE7F3)),
-            ExtraFeatureCardItem("TanyaPanda", "🤖", "Tanya Kak Panda", "Chat Tanya Jawab Anak", Color(0xFFEDE9FE)),
-            ExtraFeatureCardItem("PialaSertifikat", "🏆", "Piala & Piagam", "Cetak Sertifikat Anak Sholeh", Color(0xFFFFEDD5))
-        ).chunked(2)
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionTitleWithOrnament(title = "🌟 Zona Pintar & Permainan Edukasi", theme = theme)
-        Spacer(modifier = Modifier.height(2.dp))
-
-        extraFeatures.forEach { rowPair ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                rowPair.forEach { feat ->
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .border(1.dp, theme.surfaceColor, RoundedCornerShape(20.dp))
-                            .clickable { onSelectFeature(feat.routeKey) }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(feat.bgColor)
-                            ) {
-                                Text(feat.emoji, fontSize = 22.sp)
-                            }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = feat.title,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 13.sp,
-                                    color = theme.headerBg,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = feat.subtitle,
-                                    fontSize = 10.sp,
-                                    color = Color.Gray,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-data class ExtraFeatureCardItem(
-    val routeKey: String,
-    val emoji: String,
-    val title: String,
-    val subtitle: String,
-    val bgColor: Color
-)
-
-@Composable
 fun SectionTitleWithOrnament(title: String, theme: KidsAppTheme) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -1496,8 +1515,110 @@ fun CityPickerDialog(
 }
 
 // =========================================================================
-// HELPER JADWAL SHOLAT
+// HELPER DETEKSI GAMBAR & THUMBNAIL YOUTUBE OTOMATIS
 // =========================================================================
+fun extractYoutubeVideoId(url: String): String? {
+    if (url.isBlank()) return null
+    val patterns = listOf(
+        "v=([a-zA-Z0-9_-]{11})",
+        "youtu\\.be/([a-zA-Z0-9_-]{11})",
+        "embed/([a-zA-Z0-9_-]{11})",
+        "shorts/([a-zA-Z0-9_-]{11})"
+    )
+    for (p in patterns) {
+        val match = Regex(p).find(url)
+        if (match != null) return match.groupValues[1]
+    }
+    return null
+}
+
+fun extractMediaPreviewUrl(rawMediaUrl: String): String {
+    val parts = rawMediaUrl.split("|")
+    val directImg = parts.find { it.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)$", RegexOption.IGNORE_CASE)) }
+    if (!directImg.isNullOrBlank()) return directImg
+
+    for (part in parts) {
+        val ytId = extractYoutubeVideoId(part)
+        if (ytId != null) {
+            return "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
+        }
+    }
+    return ""
+}
+
+suspend fun fetchContentsFromServer(category: String): List<ServerContent> = withContext(Dispatchers.IO) {
+    val resultList = mutableListOf<ServerContent>()
+    try {
+        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=get_contents&category=$category")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        if (conn.responseCode == 200) {
+            val response = conn.inputStream.bufferedReader().readText()
+            val jsonObj = JSONObject(response)
+            val dataArray = jsonObj.getJSONArray("data")
+            for (i in 0 until dataArray.length()) {
+                val obj = dataArray.getJSONObject(i)
+                resultList.add(
+                    ServerContent(
+                        id = obj.getInt("id"),
+                        title = obj.getString("title"),
+                        arabicText = obj.optString("arabic_text", ""),
+                        latinText = obj.optString("latin_text", ""),
+                        description = obj.optString("description", ""),
+                        mediaUrl = obj.optString("media_url", ""),
+                        jilidLevel = 1
+                    )
+                )
+            }
+        }
+    } catch (_: Exception) {}
+    resultList
+}
+
+fun extractImageUrl(rawMediaUrl: String): String {
+    return extractMediaPreviewUrl(rawMediaUrl)
+}
+
+@Composable
+fun NetworkImageLoader(imageUrl: String, modifier: Modifier = Modifier) {
+    var bitmap by remember(imageUrl) { mutableStateOf<Bitmap?>(null) }
+    var isFailed by remember(imageUrl) { mutableStateOf(false) }
+
+    LaunchedEffect(imageUrl) {
+        withContext(Dispatchers.IO) {
+            try {
+                val url = URL(imageUrl)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 7000
+                conn.readTimeout = 7000
+                conn.doInput = true
+                conn.connect()
+                bitmap = BitmapFactory.decodeStream(conn.inputStream)
+            } catch (_: Exception) {
+                isFailed = true
+            }
+        }
+    }
+
+    Box(contentAlignment = Alignment.Center, modifier = modifier.background(MintSurface)) {
+        when {
+            bitmap != null -> {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            isFailed -> {
+                Text("🎬", fontSize = 28.sp)
+            }
+            else -> {
+                CircularProgressIndicator(color = EmeraldPrimary, modifier = Modifier.size(24.dp))
+            }
+        }
+    }
+}
 
 fun timeStrToMinutes(timeStr: String): Int {
     return try {
