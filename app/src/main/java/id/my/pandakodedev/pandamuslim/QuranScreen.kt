@@ -1,7 +1,10 @@
 package id.my.pandakodedev.pandamuslim
 
+import android.content.Context
+import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -11,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,7 +26,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -30,8 +37,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -52,76 +61,65 @@ data class AyatItem(
     val audioUrl: String
 )
 
-// 6 Pilihan Gaya Mushaf (Timur Tengah, Makkah, Madinah, IndoPak, Naskhi, Modern)
 enum class MushafStyle(
     val label: String,
     val subtitle: String,
-    val fontFamily: FontFamily,
-    val fontWeight: FontWeight,
+    val fontFileName: String,
+    val fontDownloadUrl: String,
     val lineSpacing: Int,
-    val letterSpacingSp: Float,
     val paperColor: Color,
-    val textColor: Color
+    val baseTextColor: Color,
+    val enableTajwidColor: Boolean
 ) {
+    TAJWID_WARNA(
+        label = "🌈 Mushaf Tajwid Warna",
+        subtitle = "Hukum Bacaan Berwarna",
+        fontFileName = "AmiriQuran.ttf",
+        fontDownloadUrl = "https://github.com/google/fonts/raw/main/ofl/amiriquran/AmiriQuran-Regular.ttf",
+        lineSpacing = 56,
+        paperColor = Color(0xFFFFFBEB),
+        baseTextColor = Color(0xFF0F172A),
+        enableTajwidColor = true
+    ),
     MADINAH(
         label = "🕌 Mushaf Madinah",
-        subtitle = "Kertas Krem Khas Nabawi",
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Bold,
-        lineSpacing = 50,
-        letterSpacingSp = 0.5f,
-        paperColor = Color(0xFFFFFBEB),
-        textColor = Color(0xFF1E293B)
+        subtitle = "Khat Amiri Klasik Nabawi",
+        fontFileName = "AmiriRegular.ttf",
+        fontDownloadUrl = "https://github.com/google/fonts/raw/main/ofl/amiri/Amiri-Bold.ttf",
+        lineSpacing = 54,
+        paperColor = Color(0xFFFFF8E7),
+        baseTextColor = Color(0xFF1E293B),
+        enableTajwidColor = false
     ),
     MAKKAH(
         label = "🕋 Mushaf Makkah",
-        subtitle = "Khat Tebal Masjidil Haram",
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.ExtraBold,
-        lineSpacing = 54,
-        letterSpacingSp = 1.0f,
-        paperColor = Color(0xFFFFFFFF),
-        textColor = Color(0xFF064E3B)
-    ),
-    TIMUR_TENGAH(
-        label = "📜 Timur Tengah Klasik",
-        subtitle = "Rasm Utsmani Renggang",
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Normal,
+        subtitle = "Khat Scheherazade Haramain",
+        fontFileName = "ScheherazadeNew.ttf",
+        fontDownloadUrl = "https://github.com/google/fonts/raw/main/ofl/scheherazadenew/ScheherazadeNew-Bold.ttf",
         lineSpacing = 56,
-        letterSpacingSp = 1.6f,
-        paperColor = Color(0xFFFAF5EF),
-        textColor = Color(0xFF27272A)
+        paperColor = Color(0xFFFFFFFF),
+        baseTextColor = Color(0xFF064E3B),
+        enableTajwidColor = false
     ),
     INDOPAK(
         label = "🌏 Mushaf IndoPak (Asia)",
-        subtitle = "Bulat & Ramah Anak-Anak",
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.ExtraBold,
-        lineSpacing = 52,
-        letterSpacingSp = 0.2f,
+        subtitle = "Khat Lateef Bulat & Besar",
+        fontFileName = "LateefBold.ttf",
+        fontDownloadUrl = "https://github.com/google/fonts/raw/main/ofl/lateef/Lateef-Bold.ttf",
+        lineSpacing = 58,
         paperColor = Color(0xFFF0FDF4),
-        textColor = Color(0xFF0F172A)
+        baseTextColor = Color(0xFF0F172A),
+        enableTajwidColor = true
     ),
     NASKHI_ANAK(
         label = "🧒 Khat Naskhi Anak",
-        subtitle = "Huruf Jelas & Mudah Dibaca",
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold,
-        lineSpacing = 48,
-        letterSpacingSp = 0.8f,
+        subtitle = "Huruf Jelas + Tajwid Warna",
+        fontFileName = "NotoNaskhArabic.ttf",
+        fontDownloadUrl = "https://github.com/google/fonts/raw/main/ofl/notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf",
+        lineSpacing = 52,
         paperColor = Color(0xFFF0F9FF),
-        textColor = Color(0xFF0369A1)
-    ),
-    MODERN(
-        label = "✨ Mushaf Digital Modern",
-        subtitle = "Ringkas & Tajam",
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Bold,
-        lineSpacing = 46,
-        letterSpacingSp = 0f,
-        paperColor = Color(0xFFFFFFFF),
-        textColor = Color(0xFF0F172A)
+        baseTextColor = Color(0xFF0F172A),
+        enableTajwidColor = true
     )
 }
 
@@ -131,13 +129,98 @@ enum class QuranMode(val label: String) {
     QUIZ("🧠 Mode Quiz")
 }
 
+@Composable
+fun rememberArabicFontFamily(style: MushafStyle): FontFamily {
+    val context = LocalContext.current
+    var fontFamily by remember(style) { mutableStateOf<FontFamily>(FontFamily.Serif) }
+
+    LaunchedEffect(style) {
+        withContext(Dispatchers.IO) {
+            try {
+                val fontFile = File(context.filesDir, style.fontFileName)
+                if (!fontFile.exists() || fontFile.length() < 1000L) {
+                    val url = URL(style.fontDownloadUrl)
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.connectTimeout = 10000
+                    conn.readTimeout = 10000
+                    conn.instanceFollowRedirects = true
+                    if (conn.responseCode == 200) {
+                        conn.inputStream.use { input ->
+                            fontFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+                if (fontFile.exists() && fontFile.length() > 1000L) {
+                    val tf = Typeface.createFromFile(fontFile)
+                    withContext(Dispatchers.Main) { fontFamily = FontFamily(tf) }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+    return fontFamily
+}
+
+fun buildTajwidColoredText(arabicText: String, baseColor: Color, enableColor: Boolean): AnnotatedString {
+    if (!enableColor) return AnnotatedString(arabicText)
+
+    val ghunnahColor = Color(0xFF16A34A)
+    val qalqalahColor = Color(0xFF0284C7)
+    val madColor = Color(0xFFE11D48)
+    val ikhfaTanwinColor = Color(0xFFD97706)
+
+    val qalqalahLetters = setOf('ق', 'ط', 'ب', 'ج', 'د')
+    val tanwinMarks = setOf('\u064B', '\u064C', '\u064D')
+    val sukunMarks = setOf('\u0652', '\u06E1')
+
+    return buildAnnotatedString {
+        append(arabicText)
+        addStyle(SpanStyle(color = baseColor), 0, arabicText.length)
+
+        val len = arabicText.length
+        for (i in 0 until len) {
+            val ch = arabicText[i]
+            val next1 = if (i + 1 < len) arabicText[i + 1] else ' '
+            val next2 = if (i + 2 < len) arabicText[i + 2] else ' '
+
+            if (ch in qalqalahLetters && (next1 in sukunMarks || next2 in sukunMarks)) {
+                val end = (i + 3).coerceAtMost(len)
+                addStyle(SpanStyle(color = qalqalahColor, fontWeight = FontWeight.ExtraBold), i, end)
+            }
+            if ((ch == 'ن' || ch == 'م') && (next1 == '\u0651' || next2 == '\u0651')) {
+                val end = (i + 3).coerceAtMost(len)
+                addStyle(SpanStyle(color = ghunnahColor, fontWeight = FontWeight.ExtraBold), i, end)
+            }
+            if ((ch == 'ن' && next1 in sukunMarks) || ch in tanwinMarks) {
+                val start = (i - 1).coerceAtLeast(0)
+                val end = (i + 2).coerceAtMost(len)
+                addStyle(SpanStyle(color = ikhfaTanwinColor, fontWeight = FontWeight.ExtraBold), start, end)
+            }
+            if (ch == '\u0653' || ch == '\u0670') {
+                val start = (i - 1).coerceAtLeast(0)
+                val end = (i + 1).coerceAtMost(len)
+                addStyle(SpanStyle(color = madColor, fontWeight = FontWeight.ExtraBold), start, end)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QuranScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val mengajiPrefs = remember { context.getSharedPreferences("panda_mengaji_prefs", Context.MODE_PRIVATE) }
+
     var surahList by remember { mutableStateOf<List<SurahInfo>>(emptyList()) }
     var isLoadingSurah by remember { mutableStateOf(true) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedSurah by remember { mutableStateOf<SurahInfo?>(null) }
+    var targetScrollAyat by remember { mutableStateOf(1) }
+
+    var savedSurahNo by remember { mutableStateOf(mengajiPrefs.getInt("last_surah_no", 1)) }
+    var savedAyatNo by remember { mutableStateOf(mengajiPrefs.getInt("last_ayat_no", 1)) }
+    var savedLabel by remember { mutableStateOf(mengajiPrefs.getString("last_quran_label", "Al-Fatihah : Ayat 1") ?: "Al-Fatihah : Ayat 1") }
+
+    val quranIconBitmap = rememberOptimizedIcon(R.drawable.ic_panda_quran, 100)
 
     LaunchedEffect(Unit) {
         surahList = fetchSurahList()
@@ -147,7 +230,16 @@ fun QuranScreen(onBack: () -> Unit) {
     if (selectedSurah != null) {
         SurahDetailScreen(
             surah = selectedSurah!!,
-            onBackToList = { selectedSurah = null }
+            initialScrollAyat = targetScrollAyat,
+            onBookmarkSaved = { sNo, aNo, label ->
+                savedSurahNo = sNo
+                savedAyatNo = aNo
+                savedLabel = label
+            },
+            onBackToList = {
+                selectedSurah = null
+                targetScrollAyat = 1
+            }
         )
     } else {
         Scaffold(
@@ -156,13 +248,13 @@ fun QuranScreen(onBack: () -> Unit) {
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Image(
-                                painter = painterResource(id = R.drawable.ic_panda_quran),
+                                bitmap = quranIconBitmap,
                                 contentDescription = "Quran Panda",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.size(36.dp).clip(CircleShape)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Al-Quran 114 Surah", fontWeight = FontWeight.ExtraBold, color = Color.White)
+                            Text("Al-Quran & Penanda Mengaji", fontWeight = FontWeight.ExtraBold, color = Color.White, fontSize = 16.sp)
                         }
                     },
                     navigationIcon = {
@@ -180,16 +272,49 @@ fun QuranScreen(onBack: () -> Unit) {
                     .background(OffWhiteBg)
                     .padding(padding)
             ) {
-                Box(
+                // Kolom Pencarian & Kartu Lompat ke Batas Mengaji Terakhir
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(EmeraldDark)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // Kartu Lanjutkan Mengaji
+                    Surface(
+                        color = GoldAccent,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val found = surahList.find { it.nomor == savedSurahNo }
+                                if (found != null) {
+                                    targetScrollAyat = savedAyatNo
+                                    selectedSurah = found
+                                }
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Bookmark, contentDescription = null, tint = Color(0xFF0F172A))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("📌 Batas Mengaji Terakhir Anda:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
+                                    Text(savedLabel, fontSize = 14.sp, fontWeight = FontWeight.Black, color = Color(0xFF0F172A))
+                                }
+                            }
+                            Text("Lanjutkan ➔", fontWeight = FontWeight.Black, fontSize = 12.sp, color = Color(0xFF0F172A))
+                        }
+                    }
+
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Cari nama surah (contoh: Yasin, Al-Mulk, An-Naba)...", fontSize = 13.sp) },
+                        placeholder = { Text("Cari surah (contoh: Yasin, Al-Mulk, Al-Kahf)...", fontSize = 13.sp) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = EmeraldPrimary) },
                         singleLine = true,
                         shape = RoundedCornerShape(50),
@@ -205,11 +330,7 @@ fun QuranScreen(onBack: () -> Unit) {
 
                 if (isLoadingSurah) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = EmeraldPrimary)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text("Memuat 114 Surah Al-Quran...", color = EmeraldDark, fontWeight = FontWeight.SemiBold)
-                        }
+                        CircularProgressIndicator(color = EmeraldPrimary)
                     }
                 } else {
                     val filteredList = remember(surahList, searchQuery) {
@@ -233,7 +354,10 @@ fun QuranScreen(onBack: () -> Unit) {
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { selectedSurah = surah }
+                                    .clickable {
+                                        targetScrollAyat = 1
+                                        selectedSurah = surah
+                                    }
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -247,36 +371,14 @@ fun QuranScreen(onBack: () -> Unit) {
                                             .background(MintSurface)
                                             .border(1.5.dp, EmeraldPrimary, CircleShape)
                                     ) {
-                                        Text(
-                                            text = "${surah.nomor}",
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = EmeraldDark,
-                                            fontSize = 14.sp
-                                        )
+                                        Text("${surah.nomor}", fontWeight = FontWeight.ExtraBold, color = EmeraldDark, fontSize = 14.sp)
                                     }
-
                                     Spacer(modifier = Modifier.width(14.dp))
-
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = surah.namaLatin,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 16.sp,
-                                            color = EmeraldDark
-                                        )
-                                        Text(
-                                            text = "${surah.arti} • ${surah.jumlahAyat} Ayat (${surah.tempatTurun})",
-                                            fontSize = 12.sp,
-                                            color = Color.Gray
-                                        )
+                                        Text(surah.namaLatin, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = EmeraldDark)
+                                        Text("${surah.arti} • ${surah.jumlahAyat} Ayat (${surah.tempatTurun})", fontSize = 12.sp, color = Color.Gray)
                                     }
-
-                                    Text(
-                                        text = surah.namaArab,
-                                        fontSize = 24.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = EmeraldPrimary
-                                    )
+                                    Text(surah.namaArab, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = EmeraldPrimary)
                                 }
                             }
                         }
@@ -291,16 +393,28 @@ fun QuranScreen(onBack: () -> Unit) {
 @Composable
 fun SurahDetailScreen(
     surah: SurahInfo,
+    initialScrollAyat: Int = 1,
+    onBookmarkSaved: (Int, Int, String) -> Unit,
     onBackToList: () -> Unit
 ) {
+    val context = LocalContext.current
+    val mengajiPrefs = remember { context.getSharedPreferences("panda_mengaji_prefs", Context.MODE_PRIVATE) }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
+    var bookmarkedSurah by remember { mutableStateOf(mengajiPrefs.getInt("last_surah_no", 1)) }
+    var bookmarkedAyat by remember { mutableStateOf(mengajiPrefs.getInt("last_ayat_no", 1)) }
+
     var ayatList by remember { mutableStateOf<List<AyatItem>>(emptyList()) }
     var isLoadingAyat by remember { mutableStateOf(true) }
 
     var selectedMode by remember { mutableStateOf(QuranMode.BACA) }
-    var selectedStyle by remember { mutableStateOf(MushafStyle.MADINAH) }
-    var arabicFontSize by remember { mutableStateOf(28f) }
+    var selectedStyle by remember { mutableStateOf(MushafStyle.TAJWID_WARNA) }
+    var arabicFontSize by remember { mutableStateOf(30f) }
     var showLatin by remember { mutableStateOf(true) }
     var showTranslation by remember { mutableStateOf(true) }
+
+    val activeArabicFont = rememberArabicFontFamily(selectedStyle)
 
     val repeatOptions = listOf(1, 3, 5, 7)
     var targetRepeatCount by remember { mutableStateOf(5) }
@@ -342,9 +456,8 @@ fun SurahDetailScreen(
                 } else {
                     if (autoContinueNextAyat) {
                         val nextAyat = ayatList.find { it.nomorAyat == ayat.nomorAyat + 1 }
-                        if (nextAyat != null) {
-                            playAyatAudio(nextAyat, 1)
-                        } else {
+                        if (nextAyat != null) playAyatAudio(nextAyat, 1)
+                        else {
                             currentlyPlayingAyat = null
                             currentRepeatProgress = 0
                         }
@@ -380,6 +493,11 @@ fun SurahDetailScreen(
         isLoadingAyat = true
         ayatList = fetchSurahDetail(surah.nomor)
         isLoadingAyat = false
+        if (initialScrollAyat > 1) {
+            coroutineScope.launch {
+                listState.scrollToItem((initialScrollAyat - 1).coerceAtLeast(0))
+            }
+        }
     }
 
     var showSettingsPanel by remember { mutableStateOf(false) }
@@ -396,7 +514,7 @@ fun SurahDetailScreen(
                             fontSize = 17.sp
                         )
                         Text(
-                            text = "${selectedStyle.label} • ${surah.jumlahAyat} Ayat",
+                            text = "Ketuk 🔖 pada ayat untuk tandai batas mengaji",
                             color = GoldAccent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -421,11 +539,7 @@ fun SurahDetailScreen(
         },
         bottomBar = {
             if (currentlyPlayingAyat != null) {
-                Surface(
-                    color = EmeraldDark,
-                    shadowElevation = 12.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Surface(color = EmeraldDark, shadowElevation = 12.dp, modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -467,7 +581,6 @@ fun SurahDetailScreen(
                 .background(OffWhiteBg)
                 .padding(padding)
         ) {
-            // Bar Pemilih 3 Mode Utama: Baca, Hafalan 5x, Quiz
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -480,15 +593,13 @@ fun SurahDetailScreen(
                     Surface(
                         color = if (isSelected) GoldAccent else Color.White.copy(alpha = 0.14f),
                         shape = RoundedCornerShape(50),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { selectedMode = mode }
+                        modifier = Modifier.weight(1f).clickable { selectedMode = mode }
                     ) {
                         Text(
                             text = mode.label,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = if (isSelected) EmeraldDark else Color.White,
+                            color = if (isSelected) Color(0xFF0F172A) else Color.White,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(vertical = 9.dp)
                         )
@@ -496,13 +607,10 @@ fun SurahDetailScreen(
                 }
             }
 
-            // BARIS PEMILIH CEPAT 6 JENIS KHAT / TULISAN (MAKKAH, MADINAH, TIMUR TENGAH, INDOPAK, ANAK)
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MintSurface)
+                modifier = Modifier.fillMaxWidth().background(MintSurface)
             ) {
                 items(MushafStyle.values()) { style ->
                     val chosen = selectedStyle == style
@@ -521,23 +629,28 @@ fun SurahDetailScreen(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(
-                                text = style.label,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (chosen) GoldAccent else EmeraldDark
-                            )
-                            Text(
-                                text = style.subtitle,
-                                fontSize = 9.sp,
-                                color = if (chosen) Color.White else Color.Gray
-                            )
+                            Text(style.label, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = if (chosen) GoldAccent else EmeraldDark)
+                            Text(style.subtitle, fontSize = 9.sp, color = if (chosen) Color.White else Color.Gray)
                         }
                     }
                 }
             }
 
-            // Panel Kontrol Mode Hafalan / Quiz / Ukuran Huruf
+            if (selectedStyle.enableTajwidColor) {
+                Surface(color = Color.White, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TajwidLegendDot("Ghunnah", Color(0xFF16A34A))
+                        TajwidLegendDot("Ikhfa/Tanwin", Color(0xFFD97706))
+                        TajwidLegendDot("Qalqalah", Color(0xFF0284C7))
+                        TajwidLegendDot("Mad Panjang", Color(0xFFE11D48))
+                    }
+                }
+            }
+
             AnimatedVisibility(visible = showSettingsPanel || selectedMode != QuranMode.BACA) {
                 Card(
                     shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
@@ -545,10 +658,7 @@ fun SurahDetailScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (selectedMode == QuranMode.HAFALAN) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -579,27 +689,16 @@ fun SurahDetailScreen(
 
                         if (selectedMode == QuranMode.QUIZ) {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    text = "🧠 Mode Quiz Hafalan (Ketuk kartu ayat untuk membuka jawaban):",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 12.sp,
-                                    color = EmeraldDark
-                                )
+                                Text("🧠 Mode Quiz Hafalan (Ketuk kartu ayat untuk membuka jawaban):", fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, color = EmeraldDark)
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     FilterChip(
                                         selected = quizDifficulty == 1,
-                                        onClick = {
-                                            quizDifficulty = 1
-                                            revealedAyatNumbers.clear()
-                                        },
+                                        onClick = { quizDifficulty = 1; revealedAyatNumbers.clear() },
                                         label = { Text("Sembunyikan Akhir Ayat", fontSize = 11.sp) }
                                     )
                                     FilterChip(
                                         selected = quizDifficulty == 2,
-                                        onClick = {
-                                            quizDifficulty = 2
-                                            revealedAyatNumbers.clear()
-                                        },
+                                        onClick = { quizDifficulty = 2; revealedAyatNumbers.clear() },
                                         label = { Text("Sembunyikan Full Ayat", fontSize = 11.sp) }
                                     )
                                 }
@@ -614,27 +713,14 @@ fun SurahDetailScreen(
                             ) {
                                 Text("Ukuran Huruf Arab:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EmeraldDark)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(onClick = { if (arabicFontSize > 20f) arabicFontSize -= 2f }) {
+                                    TextButton(onClick = { if (arabicFontSize > 22f) arabicFontSize -= 2f }) {
                                         Text("A-", fontWeight = FontWeight.ExtraBold, color = EmeraldDark)
                                     }
                                     Text("${arabicFontSize.toInt()} pt", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    TextButton(onClick = { if (arabicFontSize < 46f) arabicFontSize += 2f }) {
+                                    TextButton(onClick = { if (arabicFontSize < 48f) arabicFontSize += 2f }) {
                                         Text("A+", fontWeight = FontWeight.ExtraBold, color = EmeraldDark)
                                     }
                                 }
-                            }
-
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                FilterChip(
-                                    selected = showLatin,
-                                    onClick = { showLatin = !showLatin },
-                                    label = { Text("Tampilkan Latin", fontSize = 11.sp) }
-                                )
-                                FilterChip(
-                                    selected = showTranslation,
-                                    onClick = { showTranslation = !showTranslation },
-                                    label = { Text("Tampilkan Terjemahan", fontSize = 11.sp) }
-                                )
                             }
                         }
                     }
@@ -647,6 +733,7 @@ fun SurahDetailScreen(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxSize()
@@ -660,7 +747,8 @@ fun SurahDetailScreen(
                             ) {
                                 Text(
                                     text = "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
-                                    fontSize = 28.sp,
+                                    fontFamily = activeArabicFont,
+                                    fontSize = 30.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = GoldAccent,
                                     textAlign = TextAlign.Center,
@@ -673,18 +761,23 @@ fun SurahDetailScreen(
                     items(ayatList, key = { it.nomorAyat }) { ayat ->
                         val isPlayingThis = currentlyPlayingAyat == ayat.nomorAyat
                         val isRevealed = revealedAyatNumbers[ayat.nomorAyat] == true
+                        val isBookmarked = (bookmarkedSurah == surah.nomor && bookmarkedAyat == ayat.nomorAyat)
 
                         Card(
                             shape = RoundedCornerShape(22.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (isPlayingThis) Color(0xFFE0F7FA) else selectedStyle.paperColor
+                                containerColor = when {
+                                    isPlayingThis -> Color(0xFFE0F7FA)
+                                    isBookmarked -> Color(0xFFFEF3C7)
+                                    else -> selectedStyle.paperColor
+                                }
                             ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = if (isPlayingThis) 6.dp else 2.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .border(
-                                    width = if (isPlayingThis) 2.dp else 1.dp,
-                                    color = if (isPlayingThis) EmeraldPrimary else GoldAccent.copy(alpha = 0.35f),
+                                    width = if (isPlayingThis || isBookmarked) 2.5.dp else 1.dp,
+                                    color = if (isBookmarked) Color(0xFFD97706) else if (isPlayingThis) EmeraldPrimary else GoldAccent.copy(alpha = 0.35f),
                                     shape = RoundedCornerShape(22.dp)
                                 )
                                 .clickable {
@@ -701,7 +794,7 @@ fun SurahDetailScreen(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Surface(color = EmeraldDark, shape = RoundedCornerShape(50)) {
                                             Text(
@@ -712,77 +805,85 @@ fun SurahDetailScreen(
                                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                                             )
                                         }
-                                        if (isPlayingThis) {
-                                            val maxRep = if (selectedMode == QuranMode.HAFALAN) targetRepeatCount else 1
-                                            Surface(color = GoldAccent, shape = RoundedCornerShape(50)) {
+                                        if (isBookmarked) {
+                                            Surface(color = Color(0xFFD97706), shape = RoundedCornerShape(50)) {
                                                 Text(
-                                                    text = "🔊 Putaran $currentRepeatProgress/${maxRep}x",
-                                                    color = EmeraldDark,
+                                                    text = "📌 Batas Mengaji",
+                                                    color = Color.White,
                                                     fontWeight = FontWeight.ExtraBold,
-                                                    fontSize = 11.sp,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                    fontSize = 10.sp,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                 )
                                             }
                                         }
                                     }
 
-                                    FilledIconButton(
-                                        onClick = {
-                                            if (isPlayingThis) stopAudio()
-                                            else playAyatAudio(ayat, 1)
-                                        },
-                                        colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = if (isPlayingThis) Color(0xFFE11D48) else EmeraldPrimary
-                                        )
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isPlayingThis) Icons.Default.Close else Icons.Default.PlayArrow,
-                                            contentDescription = "Putar Murottal",
-                                            tint = Color.White
-                                        )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        // Tombol Tandai Batas Mengaji
+                                        FilledTonalIconButton(
+                                            onClick = {
+                                                val label = "${surah.namaLatin} : Ayat ${ayat.nomorAyat}"
+                                                bookmarkedSurah = surah.nomor
+                                                bookmarkedAyat = ayat.nomorAyat
+                                                mengajiPrefs.edit()
+                                                    .putInt("last_surah_no", surah.nomor)
+                                                    .putInt("last_ayat_no", ayat.nomorAyat)
+                                                    .putString("last_quran_label", label)
+                                                    .apply()
+                                                onBookmarkSaved(surah.nomor, ayat.nomorAyat, label)
+                                                syncMengajiBookmarkToServer(context, "quran", label)
+                                                Toast.makeText(context, "🔖 Batas mengaji ditandai: $label", Toast.LENGTH_SHORT).show()
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                                contentDescription = "Tandai Mengaji",
+                                                tint = if (isBookmarked) Color(0xFFD97706) else EmeraldDark
+                                            )
+                                        }
+
+                                        // Tombol Play Audio Murottal
+                                        FilledIconButton(
+                                            onClick = {
+                                                if (isPlayingThis) stopAudio()
+                                                else playAyatAudio(ayat, 1)
+                                            },
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = if (isPlayingThis) Color(0xFFE11D48) else EmeraldPrimary
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isPlayingThis) Icons.Default.Close else Icons.Default.PlayArrow,
+                                                contentDescription = "Putar Murottal",
+                                                tint = Color.White
+                                            )
+                                        }
                                     }
                                 }
 
                                 Spacer(modifier = Modifier.height(14.dp))
 
-                                val displayedArabic = remember(ayat.teksArab, selectedMode, quizDifficulty, isRevealed) {
-                                    if (selectedMode != QuranMode.QUIZ || isRevealed) {
-                                        ayat.teksArab
-                                    } else {
-                                        maskArabicForQuiz(ayat.teksArab, quizDifficulty)
-                                    }
+                                val rawArabic = remember(ayat.teksArab, selectedMode, quizDifficulty, isRevealed) {
+                                    if (selectedMode != QuranMode.QUIZ || isRevealed) ayat.teksArab
+                                    else maskArabicForQuiz(ayat.teksArab, quizDifficulty)
+                                }
+
+                                val styledArabic = remember(rawArabic, selectedStyle) {
+                                    buildTajwidColoredText(
+                                        arabicText = rawArabic,
+                                        baseColor = selectedStyle.baseTextColor,
+                                        enableColor = selectedStyle.enableTajwidColor
+                                    )
                                 }
 
                                 Text(
-                                    text = displayedArabic,
-                                    fontFamily = selectedStyle.fontFamily,
-                                    fontWeight = selectedStyle.fontWeight,
+                                    text = styledArabic,
+                                    fontFamily = activeArabicFont,
                                     fontSize = arabicFontSize.sp,
                                     lineHeight = selectedStyle.lineSpacing.sp,
-                                    letterSpacing = selectedStyle.letterSpacingSp.sp,
-                                    color = selectedStyle.textColor,
                                     textAlign = TextAlign.End,
                                     modifier = Modifier.fillMaxWidth()
                                 )
-
-                                if (selectedMode == QuranMode.QUIZ) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Surface(
-                                        color = if (isRevealed) Color(0xFFD1FAE5) else Color(0xFFFEF3C7),
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = if (isRevealed) "✅ Jawaban Terbuka (Ketuk lagi untuk menutup)"
-                                            else "🔒 Mode Quiz Aktif: Sambung bacaan ayat ini, lalu ketuk kartu untuk cek jawaban!",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isRevealed) Color(0xFF065F46) else Color(0xFF92400E),
-                                            modifier = Modifier.padding(10.dp),
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                }
 
                                 if (selectedMode != QuranMode.QUIZ || isRevealed) {
                                     if (showLatin && ayat.teksLatin.isNotBlank()) {
@@ -810,6 +911,15 @@ fun SurahDetailScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun TajwidLegendDot(label: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(color))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(text = label, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1E293B))
     }
 }
 

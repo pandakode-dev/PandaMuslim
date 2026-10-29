@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.location.Geocoder
 import android.location.LocationManager
 import android.media.AudioAttributes
@@ -11,19 +12,18 @@ import android.media.MediaPlayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,16 +34,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -53,92 +55,125 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.sin
 
-// Palet Warna Default Global (Digunakan juga oleh layar lain)
-val EmeraldDark = Color(0xFF004D40)
-val EmeraldPrimary = Color(0xFF00897B)
-val MintSurface = Color(0xFFE0F2F1)
-val GoldAccent = Color(0xFFFFCA28)
-val OffWhiteBg = Color(0xFFF4FBF9)
+private val IconMemoryCache = mutableMapOf<Int, ImageBitmap>()
 
-// Sistem 4 Tema Unik & Ramah Anak-Anak
-enum class KidsAppTheme(
-    val label: String,
-    val emoji: String,
-    val headerBg: Color,
-    val primaryColor: Color,
-    val accentColor: Color,
-    val surfaceColor: Color,
-    val bodyBg: Color
-) {
-    ZAMRUD(
-        label = "Zamrud Nabawi",
-        emoji = "🌿",
-        headerBg = Color(0xFF004D40),
-        primaryColor = Color(0xFF00897B),
-        accentColor = Color(0xFFFFCA28),
-        surfaceColor = Color(0xFFE0F2F1),
-        bodyBg = Color(0xFFF4FBF9)
-    ),
-    CERIA_ANAK(
-        label = "Ceria Anak Sholeh",
-        emoji = "🎈",
-        headerBg = Color(0xFF0284C7),
-        primaryColor = Color(0xFF0EA5E9),
-        accentColor = Color(0xFFFACC15),
-        surfaceColor = Color(0xFFE0F2FE),
-        bodyBg = Color(0xFFF0F9FF)
-    ),
-    MALAM_BINTANG(
-        label = "Malam Bintang",
-        emoji = "🌙",
-        headerBg = Color(0xFF311042),
-        primaryColor = Color(0xFF6B21A8),
-        accentColor = Color(0xFFFDE047),
-        surfaceColor = Color(0xFFF3E8FF),
-        bodyBg = Color(0xFFFAF5FF)
-    ),
-    PINK_MUSLIMAH(
-        label = "Pinky Muslimah",
-        emoji = "🌸",
-        headerBg = Color(0xFF9D174D),
-        primaryColor = Color(0xFFDB2777),
-        accentColor = Color(0xFFFDE047),
-        surfaceColor = Color(0xFFFCE7F3),
-        bodyBg = Color(0xFFFFF1F2)
-    )
+@Composable
+fun rememberOptimizedIcon(@DrawableRes resId: Int, targetPx: Int = 140): ImageBitmap {
+    val context = LocalContext.current
+    return remember(resId) {
+        IconMemoryCache.getOrPut(resId) {
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeResource(context.resources, resId, opts)
+            var sampleSize = 1
+            while (opts.outWidth / sampleSize > targetPx * 2 || opts.outHeight / sampleSize > targetPx * 2) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            }
+            BitmapFactory.decodeResource(context.resources, resId, decodeOpts).asImageBitmap()
+        }
+    }
 }
 
-// Data Model Menu & Jadwal Sholat
 data class MenuItem(val title: String, @DrawableRes val iconRes: Int, val badgeColor: Color)
 data class PrayerTime(val name: String, val time: String, val isNext: Boolean = false)
+data class HomeBannerSlide(
+    val id: Int,
+    val badge: String,
+    val title: String,
+    val arabicText: String,
+    val subtitle: String,
+    val imageUrl: String = ""
+)
 
 @Composable
 fun PandaMuslimHomeScreen(
+    currentTheme: KidsAppTheme = LocalPandaTheme.current,
+    onSelectTheme: (KidsAppTheme) -> Unit = {},
     onMenuClick: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("panda_theme_prefs", Context.MODE_PRIVATE) }
+    val authPrefs = remember { context.getSharedPreferences("panda_auth_prefs", Context.MODE_PRIVATE) }
+    val mengajiPrefs = remember { context.getSharedPreferences("panda_mengaji_prefs", Context.MODE_PRIVATE) }
 
-    // State Tema Aktif
-    var currentTheme by remember {
-        val savedName = prefs.getString("selected_theme", KidsAppTheme.CERIA_ANAK.name)
-        mutableStateOf(
-            try { KidsAppTheme.valueOf(savedName!!) } catch (_: Exception) { KidsAppTheme.CERIA_ANAK }
+    var loggedUser by remember {
+        val savedEmail = authPrefs.getString("user_email", null)
+        if (!savedEmail.isNullOrBlank()) {
+            mutableStateOf<LoggedInUser?>(
+                LoggedInUser(
+                    name = authPrefs.getString("user_name", "Sahabat Panda") ?: "Sahabat Panda",
+                    email = savedEmail,
+                    role = authPrefs.getString("user_role", "user") ?: "user",
+                    status = authPrefs.getString("user_status", "approved") ?: "approved"
+                )
+            )
+        } else {
+            mutableStateOf<LoggedInUser?>(null)
+        }
+    }
+
+    val lastQuranMark = remember(loggedUser) {
+        mengajiPrefs.getString("last_quran_label", "Al-Fatihah : Ayat 1") ?: "Al-Fatihah : Ayat 1"
+    }
+    val lastIqroMark = remember(loggedUser) {
+        mengajiPrefs.getString("last_iqro_label", "Iqro 1 • Hal 1") ?: "Iqro 1 • Hal 1"
+    }
+
+    val defaultBanners = remember {
+        listOf(
+            HomeBannerSlide(
+                id = 1,
+                badge = "🌟 SAHABAT IBADAH HARIAN",
+                title = "Doa Tambah Ilmu & Pahala",
+                arabicText = "رَبِّ زِدْنِي عِلْمًا وَارْزُقْنِي فَهِمًا",
+                subtitle = "Jangan lupa sholat tepat waktu & mengaji setiap hari bersama PandaMuslim!"
+            ),
+            HomeBannerSlide(
+                id = 2,
+                badge = "🌈 FITUR UNGGULAN",
+                title = "Mushaf Al-Quran Tajwid Warna",
+                arabicText = "وَرَتِّلِ الْقُرْآنَ تَرْتِيلًا",
+                subtitle = "Dilengkapi Mode Hafalan ulang 5x per ayat, Mode Quiz & 5 Khat Timur Tengah."
+            ),
+            HomeBannerSlide(
+                id = 3,
+                badge = "📗 BELAJAR MENGAJI ANAK",
+                title = "Iqro Jilid 1–6 Bersuara",
+                arabicText = "خَيْرُكُمْ مَنْ تَعَلَّمَ الْقُرْآنَ وَعَلَّمَهُ",
+                subtitle = "Ketuk huruf untuk mendengar pengucapan makhraj & latihan baca tanpa batas!"
+            )
         )
     }
 
-    val animatedHeaderBg by animateColorAsState(targetValue = currentTheme.headerBg, label = "header_bg")
-    val animatedBodyBg by animateColorAsState(targetValue = currentTheme.bodyBg, label = "body_bg")
+    var bannerSlides by remember { mutableStateOf(defaultBanners) }
 
-    // 16 Menu dengan Warna Latar Pastel Warna-Warni agar Anak-Anak Senang!
-    val menuList = remember {
+    LaunchedEffect(Unit) {
+        val serverBanners = fetchContentsFromServer("banner")
+        if (serverBanners.isNotEmpty()) {
+            val mapped = serverBanners.map { b ->
+                HomeBannerSlide(
+                    id = b.id,
+                    badge = if (b.latinText.isNotBlank()) b.latinText else "✨ INFO PANDAMUSLIM",
+                    title = b.title,
+                    arabicText = b.arabicText,
+                    subtitle = b.description,
+                    imageUrl = extractImageUrl(b.mediaUrl)
+                )
+            }
+            bannerSlides = mapped + defaultBanners
+        }
+    }
+
+    val menuRows = remember {
         listOf(
             MenuItem("Al-Quran", R.drawable.ic_panda_quran, Color(0xFFD1FAE5)),
             MenuItem("Tajwid", R.drawable.ic_menu_tajwid, Color(0xFFFEF3C7)),
@@ -156,12 +191,15 @@ fun PandaMuslimHomeScreen(
             MenuItem("Masukan", R.drawable.ic_menu_masukan, Color(0xFFECFCCB)),
             MenuItem("Mewarnai", R.drawable.ic_menu_mewarnai, Color(0xFFFFE4E6)),
             MenuItem("Iqro", R.drawable.ic_menu_iqro, Color(0xFFD1FAE5))
-        )
+        ).chunked(4)
     }
 
-    // Jam Digital Real-Time
-    var currentTimeStr by remember { mutableStateOf("00:00") }
-    var currentDateStr by remember { mutableStateOf("") }
+    var currentTimeStr by remember {
+        mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
+    }
+    var currentDateStr by remember {
+        mutableStateOf(SimpleDateFormat("dd MMM yyyy", Locale("id", "ID")).format(Date()))
+    }
 
     LaunchedEffect(Unit) {
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -175,20 +213,27 @@ fun PandaMuslimHomeScreen(
     }
 
     var currentCity by remember { mutableStateOf("Pekanbaru") }
-    var prayerTimes by remember {
+    var rawPrayerSchedule by remember {
         mutableStateOf(
             listOf(
-                PrayerTime("Imsak", "04:26"),
-                PrayerTime("Shubuh", "04:36"),
-                PrayerTime("Dzuhur", "11:58"),
-                PrayerTime("Ashar", "15:15"),
-                PrayerTime("Maghrib", "18:02"),
-                PrayerTime("Isya", "19:12", isNext = true)
+                "Imsak" to "04:26",
+                "Shubuh" to "04:36",
+                "Dzuhur" to "11:58",
+                "Ashar" to "15:15",
+                "Maghrib" to "18:02",
+                "Isya" to "19:12"
             )
         )
     }
 
-    // Pemutar Suara Adzan
+    val prayerTimes = remember(rawPrayerSchedule, currentTimeStr) {
+        calculateActivePrayerList(rawPrayerSchedule, currentTimeStr)
+    }
+
+    val nextPrayerBannerText = remember(prayerTimes, currentTimeStr) {
+        buildNextPrayerCountdownText(prayerTimes, currentTimeStr)
+    }
+
     var isPlayingAdzan by remember { mutableStateOf(false) }
     var isPreparingAdzan by remember { mutableStateOf(false) }
     val adzanPlayer = remember { MediaPlayer() }
@@ -218,9 +263,7 @@ fun PandaMuslimHomeScreen(
                     isPlayingAdzan = true
                     mp.start()
                 }
-                adzanPlayer.setOnCompletionListener {
-                    isPlayingAdzan = false
-                }
+                adzanPlayer.setOnCompletionListener { isPlayingAdzan = false }
             } catch (_: Exception) {
                 isPreparingAdzan = false
                 isPlayingAdzan = false
@@ -237,9 +280,9 @@ fun PandaMuslimHomeScreen(
     fun loadPrayerScheduleByCity(city: String) {
         currentCity = city
         CoroutineScope(Dispatchers.IO).launch {
-            val fetched = fetchPrayerTimesByCity(city)
+            val fetched = fetchRawPrayerTimesByCity(city)
             if (fetched.isNotEmpty()) {
-                withContext(Dispatchers.Main) { prayerTimes = fetched }
+                withContext(Dispatchers.Main) { rawPrayerSchedule = fetched }
             }
         }
     }
@@ -257,12 +300,12 @@ fun PandaMuslimHomeScreen(
                     val addresses = geocoder.getFromLocation(loc.latitude, loc.longitude, 1)
                     val detectedCity = addresses?.firstOrNull()?.subAdminArea
                         ?: addresses?.firstOrNull()?.locality
-                        ?: "Lokasi GPS"
+                        ?: "Pekanbaru"
                     val cleanCity = detectedCity.replace("Kota ", "").replace("Kabupaten ", "")
-                    val schedule = fetchPrayerTimesByCoords(loc.latitude, loc.longitude)
+                    val schedule = fetchRawPrayerTimesByCoords(loc.latitude, loc.longitude)
                     withContext(Dispatchers.Main) {
                         currentCity = cleanCity
-                        if (schedule.isNotEmpty()) prayerTimes = schedule
+                        if (schedule.isNotEmpty()) rawPrayerSchedule = schedule
                     }
                 } else {
                     loadPrayerScheduleByCity(currentCity)
@@ -290,107 +333,172 @@ fun PandaMuslimHomeScreen(
 
     var showFeedbackDialog by remember { mutableStateOf(false) }
     var showCityPickerDialog by remember { mutableStateOf(false) }
+    var showAuthDialog by remember { mutableStateOf(false) }
 
-    val nextPrayer = remember(prayerTimes) {
-        prayerTimes.find { it.isNext } ?: prayerTimes.last()
-    }
-
-    Box(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(animatedHeaderBg)
+            .background(currentTheme.bodyBg)
     ) {
-        // Animasi Bintang Berkilau Melayang di Latar Belakang Atas
-        AnimatedStarryHeaderCanvas()
+        item(key = "top_header") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(bottomStart = 34.dp, bottomEnd = 34.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(currentTheme.headerBg, currentTheme.primaryColor)
+                        )
+                    )
+            ) {
+                MosqueSilhouetteOrnamentCanvas(
+                    accentColor = currentTheme.accentColor,
+                    modifier = Modifier.matchParentSize()
+                )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            item(key = "header") {
-                HeaderSectionKids(
+                HeaderSectionFast(
                     theme = currentTheme,
-                    onSelectTheme = { chosenTheme ->
-                        currentTheme = chosenTheme
-                        prefs.edit().putString("selected_theme", chosenTheme.name).apply()
-                    },
+                    onSelectTheme = onSelectTheme,
+                    loggedUser = loggedUser,
+                    onClickAuth = { showAuthDialog = true },
+                    onClickAdminPanel = { onMenuClick("AdminPanel") },
                     city = currentCity,
                     date = currentDateStr,
                     currentTime = currentTimeStr,
-                    nextPrayerText = "Menuju waktu ${nextPrayer.name} (${nextPrayer.time} WIB)",
+                    nextPrayerText = nextPrayerBannerText,
                     isPlayingAdzan = isPlayingAdzan,
                     isPreparingAdzan = isPreparingAdzan,
                     onToggleAdzan = { toggleAdzanSound() },
                     onClickLocation = { showCityPickerDialog = true }
                 )
             }
+        }
 
-            item(key = "main_body") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(topStart = 36.dp, topEnd = 36.dp))
-                        .background(animatedBodyBg)
-                        .padding(16.dp)
-                ) {
-                    // Balon Sapaan Interaktif Maskot Panda untuk Anak-Anak
-                    KidsGreetingBubble(theme = currentTheme)
-                    Spacer(modifier = Modifier.height(14.dp))
+        item(key = "banner_slider_section") {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                BannerCarouselSlider3D(
+                    slides = bannerSlides,
+                    theme = currentTheme
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                MengajiBookmarkTrackerCard(
+                    theme = currentTheme,
+                    lastQuran = lastQuranMark,
+                    lastIqro = lastIqroMark,
+                    onContinueQuran = { onMenuClick("Al-Quran") },
+                    onContinueIqro = { onMenuClick("Iqro") }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionTitleWithOrnament(title = "Menu Petualangan Islami", theme = currentTheme)
+            }
+        }
 
-                    BannerSection3D(theme = currentTheme)
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    // Kartu Highlight Donasi & Infaq Jariyah
-                    DonasiHighlightBanner(
-                        theme = currentTheme,
-                        onClickDonasi = { onMenuClick("Donasi") }
-                    )
-
-                    Spacer(modifier = Modifier.height(22.dp))
-                    SectionTitle(title = "✨ Petualangan Belajar & Ibadah", color = currentTheme.headerBg)
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    MenuGridSection3D(
-                        menus = menuList,
-                        theme = currentTheme,
-                        onMenuClick = { menuTitle ->
-                            if (menuTitle == "Masukan") {
-                                showFeedbackDialog = true
-                            } else {
-                                onMenuClick(menuTitle)
-                            }
+        items(menuRows.size, key = { idx -> "menu_row_$idx" }) { rowIdx ->
+            val rowItems = menuRows[rowIdx]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.White)
+                    .border(1.dp, currentTheme.surfaceColor, RoundedCornerShape(22.dp))
+                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                rowItems.forEach { item ->
+                    FastMenuIconItem(
+                        item = item,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            if (item.title == "Masukan") showFeedbackDialog = true
+                            else onMenuClick(item.title)
                         }
                     )
+                }
+            }
+        }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        SectionTitle(title = "🕌 Jadwal Sholat • $currentCity", color = currentTheme.headerBg)
-                        TextButton(onClick = {
+        item(key = "bottom_sections") {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                SixNewFeaturesGridSection(
+                    theme = currentTheme,
+                    onSelectFeature = { route -> onMenuClick(route) }
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+                DonasiHighlightBanner(
+                    theme = currentTheme,
+                    onClickDonasi = { onMenuClick("Donasi") }
+                )
+                Spacer(modifier = Modifier.height(22.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SectionTitleWithOrnament(title = "Jadwal Sholat • $currentCity", theme = currentTheme)
+                    Surface(
+                        color = currentTheme.surfaceColor,
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.clickable {
                             permissionLauncher.launch(
                                 arrayOf(
                                     Manifest.permission.ACCESS_COARSE_LOCATION,
                                     Manifest.permission.ACCESS_FINE_LOCATION
                                 )
                             )
-                        }) {
-                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = currentTheme.primaryColor, modifier = Modifier.size(16.dp))
+                        }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = currentTheme.primaryColor, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("GPS Otomatis", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = currentTheme.primaryColor)
+                            Text(
+                                text = "Update GPS",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = currentTheme.headerBg,
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    PrayerTimesRow(prayerTimes = prayerTimes, theme = currentTheme)
-                    Spacer(modifier = Modifier.height(36.dp))
                 }
+                Spacer(modifier = Modifier.height(10.dp))
+                PrayerTimesRow(prayerTimes = prayerTimes, theme = currentTheme)
+                Spacer(modifier = Modifier.height(32.dp))
             }
         }
     }
 
     if (showFeedbackDialog) {
-        FeedbackDialog(onDismiss = { showFeedbackDialog = false })
+        FeedbackDialog(
+            loggedUser = loggedUser,
+            onDismiss = { showFeedbackDialog = false }
+        )
+    }
+
+    if (showAuthDialog) {
+        AuthLoginRegisterDialog(
+            currentUser = loggedUser,
+            onLoginSuccess = { user ->
+                loggedUser = user
+                authPrefs.edit()
+                    .putString("user_name", user.name)
+                    .putString("user_email", user.email)
+                    .putString("user_role", user.role)
+                    .putString("user_status", user.status)
+                    .apply()
+            },
+            onLogout = {
+                loggedUser = null
+                authPrefs.edit().clear().apply()
+                onMenuClick("LOGOUT")
+            },
+            onOpenAdminPanel = { onMenuClick("AdminPanel") },
+            onDismiss = { showAuthDialog = false }
+        )
     }
 
     if (showCityPickerDialog) {
@@ -414,45 +522,282 @@ fun PandaMuslimHomeScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AnimatedStarryHeaderCanvas() {
-    val infiniteTransition = rememberInfiniteTransition(label = "stars_anim")
-    val animPhase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 6.28f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 4500, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase"
-    )
+fun BannerCarouselSlider3D(
+    slides: List<HomeBannerSlide>,
+    theme: KidsAppTheme
+) {
+    if (slides.isEmpty()) return
 
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(260.dp)
+    val pagerState = rememberPagerState(pageCount = { slides.size })
+    val pandaBannerBitmap = rememberOptimizedIcon(R.drawable.ic_panda_home, 160)
+
+    LaunchedEffect(slides.size) {
+        if (slides.size > 1) {
+            while (true) {
+                delay(4500L)
+                val nextPage = (pagerState.currentPage + 1) % slides.size
+                pagerState.animateScrollToPage(nextPage)
+            }
+        }
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        val starPositions = listOf(
-            Offset(0.12f, 0.20f), Offset(0.28f, 0.12f), Offset(0.48f, 0.25f),
-            Offset(0.68f, 0.15f), Offset(0.85f, 0.22f), Offset(0.22f, 0.45f),
-            Offset(0.75f, 0.42f), Offset(0.92f, 0.35f), Offset(0.08f, 0.38f)
-        )
-        starPositions.forEachIndexed { index, pos ->
-            val offsetY = sin(animPhase + index) * 8f
-            val radius = if (index % 2 == 0) 6f else 4f
-            drawCircle(
-                color = Color(0xFFFFF59D).copy(alpha = 0.45f),
-                radius = radius,
-                center = Offset(size.width * pos.x, (size.height * pos.y) + offsetY)
-            )
+        HorizontalPager(
+            state = pagerState,
+            pageSpacing = 12.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) { pageIdx ->
+            val slide = slides[pageIdx]
+
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.5.dp, theme.primaryColor.copy(alpha = 0.28f), RoundedCornerShape(24.dp))
+            ) {
+                Column {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 8.2f)
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(theme.headerBg, theme.primaryColor)
+                                )
+                            )
+                    ) {
+                        if (slide.imageUrl.isNotBlank()) {
+                            NetworkImageLoader(
+                                imageUrl = slide.imageUrl,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))
+                                        )
+                                    )
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.BottomStart
+                            ) {
+                                Column {
+                                    Surface(color = theme.accentColor, shape = RoundedCornerShape(50)) {
+                                        Text(
+                                            text = slide.badge,
+                                            color = Color(0xFF0F172A),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Black,
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = slide.title,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 18.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        } else {
+                            MosqueSilhouetteOrnamentCanvas(
+                                accentColor = theme.accentColor,
+                                modifier = Modifier.matchParentSize()
+                            )
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(16.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Surface(color = theme.accentColor, shape = RoundedCornerShape(50)) {
+                                        Text(
+                                            text = slide.badge,
+                                            color = Color(0xFF0F172A),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Black,
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = slide.title,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 18.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (slide.arabicText.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = slide.arabicText,
+                                            color = theme.accentColor,
+                                            fontSize = 19.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Image(
+                                    bitmap = pandaBannerBitmap,
+                                    contentDescription = "Panda Banner",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(80.dp)
+                                        .clip(CircleShape)
+                                        .border(2.5.dp, theme.accentColor, CircleShape)
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(theme.surfaceColor)
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = theme.primaryColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = slide.subtitle,
+                                color = theme.headerBg,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${pageIdx + 1}/${slides.size}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            color = theme.primaryColor
+                        )
+                    }
+                }
+            }
+        }
+
+        if (slides.size > 1) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                slides.indices.forEach { idx ->
+                    val isSelected = pagerState.currentPage == idx
+                    Box(
+                        modifier = Modifier
+                            .height(7.dp)
+                            .width(if (isSelected) 22.dp else 7.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (isSelected) theme.primaryColor
+                                else theme.primaryColor.copy(alpha = 0.25f)
+                            )
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun HeaderSectionKids(
+fun MosqueSilhouetteOrnamentCanvas(accentColor: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        drawCircle(
+            color = Color.White.copy(alpha = 0.05f),
+            radius = w * 0.45f,
+            center = Offset(w * 0.85f, h * 0.2f)
+        )
+
+        val lanternColor = accentColor.copy(alpha = 0.28f)
+        val lanternPositions = listOf(w * 0.88f to h * 0.22f, w * 0.76f to h * 0.16f)
+        lanternPositions.forEach { (lx, ly) ->
+            drawLine(color = lanternColor, start = Offset(lx, 0f), end = Offset(lx, ly), strokeWidth = 3f)
+            drawCircle(color = lanternColor, radius = 16f, center = Offset(lx, ly + 16f), style = Stroke(width = 3f))
+            drawCircle(color = accentColor.copy(alpha = 0.45f), radius = 6f, center = Offset(lx, ly + 16f))
+        }
+
+        val silhouetteColor = Color.Black.copy(alpha = 0.14f)
+        val baseLineY = h
+
+        val mainDomePath = Path().apply {
+            moveTo(w * 0.30f, baseLineY)
+            quadraticBezierTo(w * 0.50f, baseLineY - 130f, w * 0.70f, baseLineY)
+            close()
+        }
+        drawPath(mainDomePath, color = silhouetteColor)
+
+        drawLine(
+            color = accentColor.copy(alpha = 0.35f),
+            start = Offset(w * 0.50f, baseLineY - 65f),
+            end = Offset(w * 0.50f, baseLineY - 92f),
+            strokeWidth = 4f
+        )
+        drawCircle(color = accentColor.copy(alpha = 0.40f), radius = 8f, center = Offset(w * 0.50f, baseLineY - 100f))
+
+        val leftDomePath = Path().apply {
+            moveTo(w * 0.12f, baseLineY)
+            quadraticBezierTo(w * 0.23f, baseLineY - 75f, w * 0.34f, baseLineY)
+            close()
+        }
+        drawPath(leftDomePath, color = silhouetteColor)
+
+        val rightDomePath = Path().apply {
+            moveTo(w * 0.66f, baseLineY)
+            quadraticBezierTo(w * 0.77f, baseLineY - 75f, w * 0.88f, baseLineY)
+            close()
+        }
+        drawPath(rightDomePath, color = silhouetteColor)
+
+        drawRect(color = silhouetteColor, topLeft = Offset(w * 0.06f, baseLineY - 125f), size = Size(w * 0.045f, 125f))
+        drawRect(color = silhouetteColor, topLeft = Offset(w * 0.895f, baseLineY - 125f), size = Size(w * 0.045f, 125f))
+    }
+}
+
+@Composable
+fun HeaderSectionFast(
     theme: KidsAppTheme,
     onSelectTheme: (KidsAppTheme) -> Unit,
+    loggedUser: LoggedInUser?,
+    onClickAuth: () -> Unit,
+    onClickAdminPanel: () -> Unit,
     city: String,
     date: String,
     currentTime: String,
@@ -462,24 +807,64 @@ fun HeaderSectionKids(
     onToggleAdzan: () -> Unit,
     onClickLocation: () -> Unit
 ) {
-    // Animasi Mengambang Lembut pada Maskot Panda
-    val infiniteTransition = rememberInfiniteTransition(label = "panda_float")
-    val floatOffset by infiniteTransition.animateFloat(
-        initialValue = -6f,
-        targetValue = 6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "panda_y"
-    )
+    val homePandaBitmap = rememberOptimizedIcon(R.drawable.ic_panda_home, 180)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 18.dp, vertical = 16.dp)
     ) {
-        // Baris Pemilih Tema Warna Ceria Anak-Anak
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                color = Color.White.copy(alpha = 0.18f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clickable { onClickAuth() }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Person, contentDescription = null, tint = theme.accentColor, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (loggedUser != null) "Assalamu'alaikum, ${loggedUser.name} ▾" else "🔐 Masuk / Daftar Akun",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (loggedUser?.role == "admin") {
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = theme.accentColor,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.clickable { onClickAdminPanel() }
+                ) {
+                    Text(
+                        text = "👑 Admin",
+                        color = Color(0xFF0F172A),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
@@ -496,13 +881,15 @@ fun HeaderSectionKids(
                         color = if (isSelected) Color(0xFF0F172A) else Color.White,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -512,53 +899,58 @@ fun HeaderSectionKids(
             Surface(
                 color = Color.White.copy(alpha = 0.16f),
                 shape = RoundedCornerShape(50),
-                modifier = Modifier.clickable { onClickLocation() }
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clickable { onClickLocation() }
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = "Lokasi",
-                        tint = theme.accentColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = theme.accentColor, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = "$city • $date ▾",
                         color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
+            Spacer(modifier = Modifier.width(8.dp))
+
             Surface(
                 color = if (isPlayingAdzan) Color(0xFFE11D48) else theme.accentColor,
                 shape = RoundedCornerShape(50),
+                shadowElevation = 2.dp,
                 modifier = Modifier.clickable { onToggleAdzan() }
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                 ) {
                     Icon(
-                        imageVector = if (isPlayingAdzan) Icons.Default.Close else Icons.Default.Notifications,
-                        contentDescription = "Suara Adzan",
+                        imageVector = if (isPlayingAdzan) Icons.Default.Close else Icons.Default.VolumeUp,
+                        contentDescription = null,
                         tint = if (isPlayingAdzan) Color.White else Color(0xFF0F172A),
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
                         text = when {
                             isPreparingAdzan -> "Memuat..."
                             isPlayingAdzan -> "Stop Adzan"
-                            else -> "🔊 Suara Adzan"
+                            else -> "Kumandang Adzan"
                         },
                         color = if (isPlayingAdzan) Color.White else Color(0xFF0F172A),
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
@@ -571,115 +963,229 @@ fun HeaderSectionKids(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = currentTime,
                     color = Color.White,
-                    fontSize = 46.sp,
-                    fontFamily = FontFamily.SansSerif,
-                    fontWeight = FontWeight.Black
+                    fontSize = 44.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1
                 )
-                Text(
-                    text = nextPrayerText,
-                    color = theme.surfaceColor,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Surface(
+                    color = Color.Black.copy(alpha = 0.22f),
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = theme.accentColor,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = nextPrayerText,
+                            color = theme.accentColor,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
-            // Maskot Panda dengan Animasi Melayang 3D
+
+            Spacer(modifier = Modifier.width(12.dp))
+
             Image(
-                painter = painterResource(id = R.drawable.ic_panda_home),
+                bitmap = homePandaBitmap,
                 contentDescription = "Avatar Panda",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(78.dp)
-                    .graphicsLayer {
-                        translationY = floatOffset
-                    }
+                    .size(74.dp)
                     .clip(CircleShape)
-                    .border(3.dp, theme.accentColor, CircleShape)
-                    .background(theme.surfaceColor)
+                    .border(2.5.dp, theme.accentColor, CircleShape)
             )
         }
     }
 }
 
 @Composable
-fun KidsGreetingBubble(theme: KidsAppTheme) {
-    val quotes = remember {
-        listOf(
-            "🐼 Assalamu'alaikum Sahabat Kecil! Yuk ngaji Iqro & Al-Quran bareng Panda! 🌟",
-            "🐼 Jangan lupa senyum dan bantu Ayah Bunda hari ini ya! pahala besar menantimu! 🍬",
-            "🐼 Yuk warnai gambar Masjid dan putar mode Hafalan Al-Quran 5x! 🎨"
-        )
-    }
-    var quoteIndex by remember { mutableStateOf(0) }
-
-    Surface(
-        color = theme.surfaceColor,
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.5.dp, theme.primaryColor.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
-            .clickable { quoteIndex = (quoteIndex + 1) % quotes.size }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = quotes[quoteIndex],
-                fontSize = 12.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = theme.headerBg,
-                modifier = Modifier.weight(1f)
-            )
-            Text("Ketuk 👆", fontSize = 10.sp, color = theme.primaryColor, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-fun SectionTitle(title: String, color: Color = EmeraldDark) {
-    Text(
-        text = title,
-        fontSize = 18.sp,
-        fontWeight = FontWeight.Black,
-        color = color
-    )
-}
-
-@Composable
-fun MenuGridSection3D(menus: List<MenuItem>, theme: KidsAppTheme, onMenuClick: (String) -> Unit) {
-    val chunkedMenus = remember(menus) { menus.chunked(4) }
-
+fun MengajiBookmarkTrackerCard(
+    theme: KidsAppTheme,
+    lastQuran: String,
+    lastIqro: String,
+    onContinueQuran: () -> Unit,
+    onContinueIqro: () -> Unit
+) {
     Card(
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(2.dp, theme.surfaceColor, RoundedCornerShape(28.dp))
+            .border(1.5.dp, theme.primaryColor.copy(alpha = 0.30f), RoundedCornerShape(24.dp))
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 20.dp, horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
-        ) {
-            chunkedMenus.forEach { rowItems ->
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    rowItems.forEach { item ->
-                        key(item.title) {
-                            Bouncy3DMenuIcon(
-                                item = item,
-                                modifier = Modifier.weight(1f),
-                                onClick = { onMenuClick(item.title) }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(theme.surfaceColor)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Bookmark,
+                            contentDescription = null,
+                            tint = theme.primaryColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "Penanda Batas Mengaji",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 15.sp,
+                            color = theme.headerBg,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Ketuk kartu di bawah untuk melanjutkan bacaan",
+                            fontSize = 11.sp,
+                            color = Color.Gray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Surface(
+                    color = Color(0xFFD1FAE5),
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color(0xFF059669),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Tersimpan",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFF065F46),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    color = theme.surfaceColor,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(1.dp, theme.primaryColor.copy(alpha = 0.25f), RoundedCornerShape(18.dp))
+                        .clickable { onContinueQuran() }
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("📖", fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Al-Quran",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = theme.primaryColor,
+                                maxLines = 1
                             )
                         }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = lastQuran.replace(" (Ketuk untuk lanjut)", ""),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black,
+                            color = theme.headerBg,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Lanjut Baca ➔",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = theme.primaryColor,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Surface(
+                    color = Color(0xFFFEF9C3),
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(1.dp, Color(0xFFFACC15), RoundedCornerShape(18.dp))
+                        .clickable { onContinueIqro() }
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("📗", fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Buku Iqro",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFF92400E),
+                                maxLines = 1
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = lastIqro.replace(" (Ketuk untuk lanjut)", ""),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF78350F),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Lanjut Iqro ➔",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFB45309),
+                            maxLines = 1
+                        )
                     }
                 }
             }
@@ -688,55 +1194,133 @@ fun MenuGridSection3D(menus: List<MenuItem>, theme: KidsAppTheme, onMenuClick: (
 }
 
 @Composable
-fun Bouncy3DMenuIcon(item: MenuItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
+fun SixNewFeaturesGridSection(
+    theme: KidsAppTheme,
+    onSelectFeature: (String) -> Unit
+) {
+    val extraFeatures = remember {
+        listOf(
+            ExtraFeatureCardItem("KisahNabi", "📖", "Kisah 25 Nabi", "Audio Dongeng Teladan", Color(0xFFFEF3C7)),
+            ExtraFeatureCardItem("KuisIslami", "🎮", "Kuis Pintar", "Game Tebak Ayat & Asmaul", Color(0xFFD1FAE5)),
+            ExtraFeatureCardItem("KalenderHijriah", "🌙", "Celengan Amal", "Kalender Hijriah & Bintang", Color(0xFFE0F2FE)),
+            ExtraFeatureCardItem("KamusHalal", "🍜", "Kamus Halal", "Cek Bahan & Kode Makanan", Color(0xFFFCE7F3)),
+            ExtraFeatureCardItem("TanyaPanda", "🤖", "Tanya Kak Panda", "Chat Tanya Jawab Anak", Color(0xFFEDE9FE)),
+            ExtraFeatureCardItem("PialaSertifikat", "🏆", "Piala & Piagam", "Cetak Sertifikat Anak Sholeh", Color(0xFFFFEDD5))
+        ).chunked(2)
+    }
 
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.80f else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioHighBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = "bouncy_scale"
-    )
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionTitleWithOrnament(title = "🌟 Zona Pintar & Permainan Edukasi", theme = theme)
+        Spacer(modifier = Modifier.height(2.dp))
 
-    val rotationZ by animateFloatAsState(
-        targetValue = if (isPressed) -8f else 0f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "bouncy_rot"
-    )
+        extraFeatures.forEach { rowPair ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                rowPair.forEach { feat ->
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .border(1.dp, theme.surfaceColor, RoundedCornerShape(20.dp))
+                            .clickable { onSelectFeature(feat.routeKey) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(feat.bgColor)
+                            ) {
+                                Text(feat.emoji, fontSize = 22.sp)
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = feat.title,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 13.sp,
+                                    color = theme.headerBg,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = feat.subtitle,
+                                    fontSize = 10.sp,
+                                    color = Color.Gray,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class ExtraFeatureCardItem(
+    val routeKey: String,
+    val emoji: String,
+    val title: String,
+    val subtitle: String,
+    val bgColor: Color
+)
+
+@Composable
+fun SectionTitleWithOrnament(title: String, theme: KidsAppTheme) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .width(5.dp)
+                .height(20.dp)
+                .clip(RoundedCornerShape(50))
+                .background(theme.primaryColor)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = title,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Black,
+            color = theme.headerBg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun FastMenuIconItem(item: MenuItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val iconBitmap = rememberOptimizedIcon(item.iconRes, 130)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                this.rotationZ = rotationZ
-            }
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            )
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(68.dp)
-                .clip(RoundedCornerShape(22.dp))
+                .size(62.dp)
+                .clip(RoundedCornerShape(20.dp))
                 .background(item.badgeColor)
-                .border(2.dp, Color.White, RoundedCornerShape(22.dp))
                 .padding(4.dp),
             contentAlignment = Alignment.Center
         ) {
             Image(
-                painter = painterResource(id = item.iconRes),
+                bitmap = iconBitmap,
                 contentDescription = item.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(16.dp))
             )
         }
         Spacer(modifier = Modifier.height(6.dp))
@@ -752,95 +1336,11 @@ fun Bouncy3DMenuIcon(item: MenuItem, modifier: Modifier = Modifier, onClick: () 
 }
 
 @Composable
-fun BannerSection3D(theme: KidsAppTheme) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(140.dp)
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(theme.headerBg, theme.primaryColor)
-                        )
-                    )
-                    .padding(16.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Surface(
-                            color = theme.accentColor,
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = "🌟 ANAK SHOLEH & SHOLEHAH",
-                                color = Color(0xFF0F172A),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "PandaMuslim Ceria",
-                            color = Color.White,
-                            fontWeight = FontWeight.Black,
-                            fontSize = 20.sp
-                        )
-                        Text(
-                            text = "رَبِّ زِدْنِي عِلْمًا وَارْزُقْنِي فَهِمًا",
-                            color = theme.surfaceColor,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_panda_home),
-                        contentDescription = "Panda Maskot",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(86.dp)
-                            .clip(CircleShape)
-                            .border(2.dp, theme.accentColor, CircleShape)
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(theme.surfaceColor)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Star, contentDescription = null, tint = theme.primaryColor, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "\"Ya Allah, tambahkanlah ilmuku dan berikanlah aku pemahaman yang baik!\"",
-                    color = theme.headerBg,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun DonasiHighlightBanner(theme: KidsAppTheme, onClickDonasi: () -> Unit) {
+    val amalanPanda = rememberOptimizedIcon(R.drawable.ic_panda_amalan, 140)
+
     Card(
         shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClickDonasi() }
@@ -848,79 +1348,45 @@ fun DonasiHighlightBanner(theme: KidsAppTheme, onClickDonasi: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(theme.headerBg, theme.primaryColor)
-                    )
-                )
+                .background(Brush.linearGradient(listOf(theme.headerBg, theme.primaryColor)))
                 .border(2.dp, theme.accentColor, RoundedCornerShape(24.dp))
                 .padding(16.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Surface(
-                    color = theme.accentColor,
-                    shape = RoundedCornerShape(50)
-                ) {
-                    Text(
-                        text = "💝 CELENGAN SURGA & INFAQ JARIYAH",
-                        color = Color(0xFF0F172A),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-                Text("BSI • DANA • Shopee • GoPay", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(
-                    painter = painterResource(id = R.drawable.ic_panda_amalan),
+                    bitmap = amalanPanda,
                     contentDescription = "Panda Donasi",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(58.dp)
+                        .size(54.dp)
                         .clip(CircleShape)
                         .border(2.dp, theme.accentColor, CircleShape)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "\"Sedekah tidak akan mengurangi harta sedikit pun...\"",
+                        text = "💝 Infaq & Wakaf Jariyah Server Dakwah",
                         color = theme.accentColor,
                         fontWeight = FontWeight.ExtraBold,
-                        fontSize = 13.sp,
-                        fontStyle = FontStyle.Italic
+                        fontSize = 14.sp
                     )
                     Text(
-                        text = "Dukung pengembangan fitur belajar anak & server dakwah PandaMuslim.",
+                        text = "Dukung operasional aplikasi via BSI, DANA, ShopeePay & GoPay.",
                         color = Color.White,
                         fontSize = 11.sp
                     )
                 }
             }
-
             Spacer(modifier = Modifier.height(10.dp))
-
             Button(
                 onClick = onClickDonasi,
                 colors = ButtonDefaults.buttonColors(containerColor = theme.accentColor),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Salurkan Infaq Terbaik Sekarang ✨",
-                    color = Color(0xFF0F172A),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 13.sp
-                )
+                Icon(Icons.Default.Favorite, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Salurkan Infaq Terbaik Sekarang ✨", color = Color(0xFF0F172A), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
             }
         }
     }
@@ -929,7 +1395,7 @@ fun DonasiHighlightBanner(theme: KidsAppTheme, onClickDonasi: () -> Unit) {
 @Composable
 fun PrayerTimesRow(prayerTimes: List<PrayerTime>, theme: KidsAppTheme) {
     LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         items(prayerTimes, key = { it.name }) { prayer ->
@@ -937,27 +1403,47 @@ fun PrayerTimesRow(prayerTimes: List<PrayerTime>, theme: KidsAppTheme) {
             val textColor = if (prayer.isNext) Color.White else theme.headerBg
 
             Card(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(containerColor = bgColor),
-                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-                modifier = Modifier.width(94.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = if (prayer.isNext) 4.dp else 1.dp),
+                modifier = Modifier
+                    .width(96.dp)
+                    .border(
+                        width = if (prayer.isNext) 2.dp else 1.dp,
+                        color = if (prayer.isNext) theme.accentColor else theme.surfaceColor,
+                        shape = RoundedCornerShape(18.dp)
+                    )
             ) {
                 Column(
-                    modifier = Modifier.padding(vertical = 14.dp, horizontal = 10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp, horizontal = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    if (prayer.isNext) {
+                        Text(
+                            text = "BERIKUTNYA",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            color = theme.accentColor,
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
                     Text(
                         text = prayer.name,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = textColor
+                        color = textColor,
+                        maxLines = 1
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = prayer.time,
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Black,
-                        color = if (prayer.isNext) theme.accentColor else theme.primaryColor
+                        color = if (prayer.isNext) theme.accentColor else theme.primaryColor,
+                        maxLines = 1
                     )
                 }
             }
@@ -988,14 +1474,10 @@ fun CityPickerDialog(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Gunakan Deteksi GPS Otomatis")
                 }
-                Divider(modifier = Modifier.padding(vertical = 4.dp))
-                Text("Atau pilih kota secara manual:", fontSize = 12.sp, color = Color.Gray)
-                LazyColumn(modifier = Modifier.height(220.dp)) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                LazyColumn(modifier = Modifier.height(200.dp)) {
                     items(popularCities) { city ->
-                        TextButton(
-                            onClick = { onSelectCity(city) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        TextButton(onClick = { onSelectCity(city) }, modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = if (city == currentCity) "✅ $city" else city,
                                 fontWeight = if (city == currentCity) FontWeight.ExtraBold else FontWeight.Medium,
@@ -1013,51 +1495,194 @@ fun CityPickerDialog(
     )
 }
 
-suspend fun fetchPrayerTimesByCoords(lat: Double, lng: Double): List<PrayerTime> = withContext(Dispatchers.IO) {
+// =========================================================================
+// HELPER JADWAL SHOLAT
+// =========================================================================
+
+fun timeStrToMinutes(timeStr: String): Int {
+    return try {
+        val clean = timeStr.trim().take(5)
+        val parts = clean.split(":")
+        val h = parts[0].toInt()
+        val m = parts[1].toInt()
+        (h * 60) + m
+    } catch (_: Exception) {
+        0
+    }
+}
+
+fun calculateActivePrayerList(
+    rawList: List<Pair<String, String>>,
+    currentTimeStr: String
+): List<PrayerTime> {
+    if (rawList.isEmpty()) return emptyList()
+    val nowMinutes = timeStrToMinutes(currentTimeStr)
+
+    val nextIndex = rawList.indexOfFirst { (_, time) ->
+        timeStrToMinutes(time) > nowMinutes
+    }
+
+    val highlightedIndex = if (nextIndex != -1) nextIndex else 1.coerceAtMost(rawList.lastIndex)
+
+    return rawList.mapIndexed { idx, (name, time) ->
+        PrayerTime(
+            name = name,
+            time = time,
+            isNext = (idx == highlightedIndex)
+        )
+    }
+}
+
+fun buildNextPrayerCountdownText(prayerTimes: List<PrayerTime>, currentTimeStr: String): String {
+    val nextPrayer = prayerTimes.find { it.isNext } ?: return "Menuju waktu Sholat"
+    val nowMin = timeStrToMinutes(currentTimeStr)
+    val targetMin = timeStrToMinutes(nextPrayer.time)
+
+    val diffMin = if (targetMin >= nowMin) {
+        targetMin - nowMin
+    } else {
+        (24 * 60 - nowMin) + targetMin
+    }
+
+    val hours = diffMin / 60
+    val mins = diffMin % 60
+    val countdownPart = if (hours > 0) "${hours}j ${mins}m lagi" else "${mins} menit lagi"
+
+    return "Menuju ${nextPrayer.name} (${nextPrayer.time}) • $countdownPart"
+}
+
+suspend fun fetchRawPrayerTimesByCoords(lat: Double, lng: Double): List<Pair<String, String>> = withContext(Dispatchers.IO) {
     try {
         val url = URL("https://api.aladhan.com/v1/timings?latitude=$lat&longitude=$lng&method=20")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         if (conn.responseCode == 200) {
-            val response = conn.inputStream.bufferedReader().readText()
-            return@withContext parseAladhanTimings(response)
+            return@withContext parseRawAladhanTimings(conn.inputStream.bufferedReader().readText())
         }
     } catch (_: Exception) {}
     emptyList()
 }
 
-suspend fun fetchPrayerTimesByCity(city: String): List<PrayerTime> = withContext(Dispatchers.IO) {
+suspend fun fetchRawPrayerTimesByCity(city: String): List<Pair<String, String>> = withContext(Dispatchers.IO) {
     try {
         val url = URL("https://api.aladhan.com/v1/timingsByCity?city=$city&country=Indonesia&method=20")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         if (conn.responseCode == 200) {
-            val response = conn.inputStream.bufferedReader().readText()
-            return@withContext parseAladhanTimings(response)
+            return@withContext parseRawAladhanTimings(conn.inputStream.bufferedReader().readText())
         }
     } catch (_: Exception) {}
     emptyList()
 }
 
-fun parseAladhanTimings(jsonResponse: String): List<PrayerTime> {
+fun parseRawAladhanTimings(jsonResponse: String): List<Pair<String, String>> {
     val timings = JSONObject(jsonResponse).getJSONObject("data").getJSONObject("timings")
-    val nowTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-
-    val rawList = listOf(
-        "Imsak" to timings.optString("Imsak", "04:25").take(5),
-        "Shubuh" to timings.optString("Fajr", "04:35").take(5),
-        "Dzuhur" to timings.optString("Dhuhr", "12:00").take(5),
+    return listOf(
+        "Imsak" to timings.optString("Imsak", "04:26").take(5),
+        "Shubuh" to timings.optString("Fajr", "04:36").take(5),
+        "Dzuhur" to timings.optString("Dhuhr", "11:58").take(5),
         "Ashar" to timings.optString("Asr", "15:15").take(5),
         "Maghrib" to timings.optString("Maghrib", "18:02").take(5),
         "Isya" to timings.optString("Isha", "19:12").take(5)
     )
+}
 
-    var nextFound = false
-    return rawList.map { (name, time) ->
-        val isNext = if (!nextFound && time > nowTime) {
-            nextFound = true
-            true
-        } else false
-        PrayerTime(name, time, isNext)
+@Composable
+fun FeedbackDialog(
+    loggedUser: LoggedInUser? = null,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf(loggedUser?.name ?: "") }
+    var email by remember { mutableStateOf(loggedUser?.email ?: "") }
+    var message by remember { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
+    var responseText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Saran & Laporan Bug 🐼", fontWeight = FontWeight.ExtraBold, color = EmeraldDark) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (responseText.isNotEmpty()) {
+                    Text(responseText, color = EmeraldPrimary, fontWeight = FontWeight.Bold)
+                } else {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Nama Pengirim") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Email / WhatsApp Anda") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = message,
+                        onValueChange = { message = it },
+                        label = { Text("Tulis masukan atau kendala bug...") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (responseText.isEmpty()) {
+                Button(
+                    onClick = {
+                        isSending = true
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val result = sendFeedbackToServer(name, email, message)
+                            withContext(Dispatchers.Main) {
+                                isSending = false
+                                responseText = result
+                            }
+                        }
+                    },
+                    enabled = !isSending && message.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                ) {
+                    Text(if (isSending) "Mengirim..." else "Kirim ke Admin")
+                }
+            } else {
+                Button(onClick = onDismiss) { Text("Tutup") }
+            }
+        },
+        dismissButton = {
+            if (responseText.isEmpty()) {
+                TextButton(onClick = onDismiss) { Text("Batal") }
+            }
+        }
+    )
+}
+
+fun sendFeedbackToServer(name: String, email: String, message: String): String {
+    return try {
+        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=send_feedback")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        conn.doOutput = true
+
+        val jsonParam = JSONObject().apply {
+            put("name", if (name.isBlank()) "Sahabat Panda" else name)
+            put("email", if (email.isBlank()) "Tanpa Email" else email)
+            put("message", message)
+        }
+
+        OutputStreamWriter(conn.outputStream).use { it.write(jsonParam.toString()) }
+
+        if (conn.responseCode == 200) {
+            val resp = JSONObject(conn.inputStream.bufferedReader().readText())
+            resp.optString("message", "Alhamdulillah! Masukan Anda sudah diterima Admin.")
+        } else {
+            "Gagal mengirim (Kode: ${conn.responseCode})"
+        }
+    } catch (e: Exception) {
+        "Pastikan internet menyala: ${e.localizedMessage}"
     }
 }
