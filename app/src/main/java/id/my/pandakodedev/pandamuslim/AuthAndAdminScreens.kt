@@ -867,26 +867,6 @@ fun AdminMobilePanelScreen(onBack: () -> Unit) {
 }
 
 // Fungsi Koneksi API
-fun registerEmailToServer(name: String, email: String, pass: String): String {
-    return try {
-        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=register_email")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-        conn.doOutput = true
-        val json = JSONObject().apply {
-            put("name", name)
-            put("email", email)
-            put("password", pass)
-        }
-        OutputStreamWriter(conn.outputStream).use { it.write(json.toString()) }
-        val resp = JSONObject(conn.inputStream.bufferedReader().readText())
-        resp.optString("message", "Pendaftaran terkirim! Menunggu Approve Admin.")
-    } catch (e: Exception) {
-        "Gagal terhubung ke server: ${e.localizedMessage}"
-    }
-}
-
 fun loginEmailToServer(email: String, pass: String): Pair<LoggedInUser?, String> {
     return try {
         val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=login_email")
@@ -1055,4 +1035,37 @@ fun approveUserOnServer(userId: Int, newStatus: String, newRole: String = "") {
         OutputStreamWriter(conn.outputStream).use { it.write(json.toString()) }
         conn.responseCode
     } catch (_: Exception) {}
+}
+
+fun registerEmailToServer(name: String, email: String, pass: String): String {
+    return try {
+        val ts = System.currentTimeMillis()
+        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=register_email&_t=$ts")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.useCaches = false
+        conn.defaultUseCaches = false
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
+        conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        conn.setRequestProperty("Cache-Control", "no-cache")
+        conn.doOutput = true
+
+        val json = JSONObject().apply {
+            put("name", name.trim())
+            put("email", email.trim().lowercase())
+            put("password", pass.trim())
+        }
+        OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
+            it.write(json.toString())
+            it.flush()
+        }
+
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val respText = stream.bufferedReader().readText()
+        val resp = JSONObject(respText)
+        resp.optString("message", "Pendaftaran terkirim! Menunggu Approve Admin.")
+    } catch (e: Exception) {
+        "Gagal terhubung ke server: ${e.localizedMessage}"
+    }
 }
