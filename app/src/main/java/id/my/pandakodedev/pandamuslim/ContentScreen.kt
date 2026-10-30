@@ -15,7 +15,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -48,7 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.util.Locale
-import kotlin.random.Random
 
 data class ServerContent(
     val id: Int,
@@ -58,25 +55,6 @@ data class ServerContent(
     val description: String,
     val mediaUrl: String,
     val jilidLevel: Int = 1
-)
-
-data class HijaiyahSoundCard(
-    val baseLetter: String,
-    val fathah: String,
-    val kasrah: String,
-    val dhammah: String,
-    val tanwin: String,
-    val latinName: String,
-    val readFathah: String,
-    val readKasrah: String,
-    val readDhammah: String,
-    val readTanwin: String,
-    val cardColor: Color
-)
-
-data class IqroReadingToken(
-    val arabic: String,
-    val latin: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,6 +71,9 @@ fun DynamicContentScreen(
     var items by remember { mutableStateOf<List<ServerContent>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
+    var doaHaditsSubTab by remember { mutableStateOf(0) }
+    var belajarSubTab by remember { mutableStateOf("SEMUA") }
+
     var iqroTabMode by remember { mutableStateOf(0) }
     var selectedJilid by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_jilid", 1)) }
     var bookmarkedIqroId by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_id", 901)) }
@@ -103,19 +84,15 @@ fun DynamicContentScreen(
 
     var zoomedContent by remember { mutableStateOf<ServerContent?>(null) }
     var activeSpeakingTitle by remember { mutableStateOf<String?>(null) }
+    var currentlyReadingExplanationId by remember { mutableStateOf<Int?>(null) }
 
-    // State Buka/Tutup Deskripsi (Default: TERTUTUP / false untuk semua item!)
     val expandedDescriptionIds = remember { mutableStateMapOf<Int, Boolean>() }
-
-    // State Pemutar Video Langsung di Dalam Aplikasi (In-App Player)
     var activeInAppVideoItem by remember { mutableStateOf<ServerContent?>(null) }
 
-    // State Pemutar Audio/Video Background (Tetap Jalan Walau Layar Terkunci!)
     var isPlayingBackgroundMedia by remember { mutableStateOf(false) }
     var isPreparingBackgroundMedia by remember { mutableStateOf(false) }
     var backgroundMediaTitle by remember { mutableStateOf("") }
 
-    // MediaPlayer dengan PARTIAL_WAKE_LOCK agar CPU & Audio tetap hidup saat layar HP mati/terkunci
     val bgMediaPlayer = remember {
         MediaPlayer().apply {
             setWakeMode(context.applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
@@ -127,12 +104,13 @@ fun DynamicContentScreen(
         var ttsInstance: TextToSpeech? = null
         ttsInstance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val arabResult = ttsInstance?.setLanguage(Locale("ar"))
-                if (arabResult == TextToSpeech.LANG_MISSING_DATA || arabResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    ttsInstance?.language = Locale("id", "ID")
+                val saudiLocale = Locale("ar", "SA")
+                val res = ttsInstance?.setLanguage(saudiLocale)
+                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    ttsInstance?.setLanguage(Locale("id", "ID"))
                 }
-                ttsInstance?.setPitch(1.08f)
-                ttsInstance?.setSpeechRate(0.80f)
+                ttsInstance?.setPitch(1.0f)
+                ttsInstance?.setSpeechRate(0.75f)
             }
         }
         ttsEngine = ttsInstance
@@ -147,7 +125,82 @@ fun DynamicContentScreen(
         }
     }
 
-    // Fungsi Memutar Kajian / Video MP4 / Audio MP3 di Background (Tetap Jalan Saat Layar Terkunci)
+    fun playAuthenticIslamicAudio(arabicText: String, latinText: String, rawMediaUrl: String = "") {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        currentlyReadingExplanationId = null
+        activeSpeakingTitle = "🔊 Melafalkan Ayat/Doa: $arabicText"
+
+        val parts = rawMediaUrl.split("|")
+        val directMp3Url = parts.find { it.matches(Regex(".*\\.(mp3|wav|ogg|m4a)$", RegexOption.IGNORE_CASE)) } ?: ""
+
+        if (directMp3Url.isNotBlank()) {
+            try {
+                ttsEngine?.stop()
+                bgMediaPlayer.reset()
+                bgMediaPlayer.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .build()
+                )
+                bgMediaPlayer.setDataSource(directMp3Url)
+                bgMediaPlayer.prepareAsync()
+                bgMediaPlayer.setOnPreparedListener { mp -> mp.start() }
+                return
+            } catch (_: Exception) {}
+        }
+
+        ttsEngine?.let { tts ->
+            val saudiLocale = Locale("ar", "SA")
+            val genArabLocale = Locale("ar")
+            if (tts.isLanguageAvailable(saudiLocale) >= TextToSpeech.LANG_AVAILABLE) {
+                tts.language = saudiLocale
+            } else {
+                tts.language = genArabLocale
+            }
+            tts.setPitch(1.0f)
+            tts.setSpeechRate(0.70f)
+
+            val normalizedArabic = normalizeArabicForAuthenticRecitation(arabicText)
+            tts.speak(normalizedArabic, TextToSpeech.QUEUE_FLUSH, null, "makhraj_arab")
+        }
+    }
+
+    fun toggleReadIndonesianExplanation(item: ServerContent) {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        try {
+            if (bgMediaPlayer.isPlaying) bgMediaPlayer.stop()
+        } catch (_: Exception) {}
+
+        if (currentlyReadingExplanationId == item.id) {
+            ttsEngine?.stop()
+            currentlyReadingExplanationId = null
+            activeSpeakingTitle = null
+        } else {
+            currentlyReadingExplanationId = item.id
+            val cleanTitle = item.title.replace(Regex("\\[.*?\\]"), "").trim()
+            val cleanDesc = item.description
+                .replace("📌", "")
+                .replace("🔊", "")
+                .replace("📖", "")
+                .replace("🌟", "")
+                .replace("⚠️", "Perhatian: ")
+                .replace("🛡️", "")
+                .replace("•", ", ")
+                .replace("➔", " menjadi ")
+
+            activeSpeakingTitle = "🎙️ Membacakan Penjelasan: $cleanTitle"
+
+            ttsEngine?.let { tts ->
+                tts.language = Locale("id", "ID")
+                tts.setPitch(1.03f)
+                tts.setSpeechRate(0.92f)
+                val fullSpeech = "$cleanTitle. ${if (item.latinText.isNotBlank()) "Bacaan: ${item.latinText}." else ""} Penjelasan: $cleanDesc"
+                tts.speak(fullSpeech, TextToSpeech.QUEUE_FLUSH, null, "indo_explanation_${item.id}")
+            }
+        }
+    }
+
     fun playBackgroundLockScreenMedia(item: ServerContent) {
         val rawUrl = item.mediaUrl
         val parts = rawUrl.split("|")
@@ -179,18 +232,15 @@ fun DynamicContentScreen(
                 bgMediaPlayer.setOnCompletionListener {
                     isPlayingBackgroundMedia = false
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 isPreparingBackgroundMedia = false
                 isPlayingBackgroundMedia = false
             }
         } else {
-            // Jika berupa Link YouTube (dan belum ada file MP4/MP3 langsung), bacakan isi kajian dengan Suara Narator Background (Tetap hidup saat layar mati!)
             isPreparingBackgroundMedia = false
             isPlayingBackgroundMedia = true
-            backgroundMediaTitle = "${item.title} (Mode Audio Narasi)"
-            ttsEngine?.language = Locale("id", "ID")
-            val narration = "Memutar kajian audio: ${item.title}. ${item.description}"
-            ttsEngine?.speak(narration, TextToSpeech.QUEUE_FLUSH, null, "bg_narration")
+            backgroundMediaTitle = "${item.title} (Mode Audio)"
+            toggleReadIndonesianExplanation(item)
             Toast.makeText(context, "🔒 Mode Dengar Audio Aktif! Anda bisa mengunci layar HP sekarang.", Toast.LENGTH_LONG).show()
         }
     }
@@ -201,45 +251,9 @@ fun DynamicContentScreen(
             bgMediaPlayer.reset()
         } catch (_: Exception) {}
         ttsEngine?.stop()
+        currentlyReadingExplanationId = null
         isPlayingBackgroundMedia = false
         isPreparingBackgroundMedia = false
-    }
-
-    fun playIqroSound(arabicText: String, latinText: String, rawMediaUrl: String = "") {
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        activeSpeakingTitle = "$arabicText  ➔  Dibaca: $latinText"
-
-        val parts = rawMediaUrl.split("|")
-        val audioUrl = parts.find { it.matches(Regex(".*\\.(mp3|wav|ogg|m4a)$", RegexOption.IGNORE_CASE)) } ?: ""
-
-        if (audioUrl.isNotBlank()) {
-            try {
-                bgMediaPlayer.reset()
-                bgMediaPlayer.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .build()
-                )
-                bgMediaPlayer.setDataSource(audioUrl)
-                bgMediaPlayer.prepareAsync()
-                bgMediaPlayer.setOnPreparedListener { it.start() }
-                return
-            } catch (_: Exception) {}
-        }
-
-        ttsEngine?.let { tts ->
-            val arabLocale = Locale("ar")
-            val isArabSupported = tts.isLanguageAvailable(arabLocale) >= TextToSpeech.LANG_AVAILABLE
-            if (isArabSupported && arabicText.isNotBlank()) {
-                tts.language = arabLocale
-                tts.speak(arabicText, TextToSpeech.QUEUE_FLUSH, null, "iqro_arab")
-            } else {
-                tts.language = Locale("id", "ID")
-                val spokenText = latinText.replace("—", " ").replace("-", " ").ifBlank { arabicText }
-                tts.speak(spokenText, TextToSpeech.QUEUE_FLUSH, null, "iqro_id")
-            }
-        }
     }
 
     fun saveIqroBookmark(item: ServerContent) {
@@ -268,20 +282,12 @@ fun DynamicContentScreen(
                 title = {
                     Column {
                         Text(menuTitle, fontWeight = FontWeight.ExtraBold, color = Color.White, fontSize = 18.sp)
-                        if (categoryKey == "iqro") {
-                            Text(
-                                text = "📌 Terakhir: $bookmarkedIqroLabel",
-                                color = GoldAccent,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        } else if (categoryKey == "video") {
-                            Text(
-                                text = "🎬 Putar di Aplikasi & Mode Layar Terkunci 🔒",
-                                color = GoldAccent,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        when (categoryKey) {
+                            "iqro" -> Text("📌 Terakhir: $bookmarkedIqroLabel", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "doa" -> Text("🤲 Koleksi Doa Harian & Hadits Pilihan Bersuara", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "belajar" -> Text("🛡️ Adab Pergaulan, Anti-Zina, Panduan & Bacaan Sholat", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "tajwid" -> Text("📖 18 Hukum Tajwid Lengkap & Suara Penjelasan", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "video" -> Text("🎬 Putar di Aplikasi & Mode Layar Terkunci 🔒", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 },
@@ -297,8 +303,7 @@ fun DynamicContentScreen(
             )
         },
         bottomBar = {
-            // BAR PLAYER BACKGROUND (TETAP BERJALAN WALAU LAYAR HP DIKUNCI!)
-            if (isPlayingBackgroundMedia || isPreparingBackgroundMedia) {
+            if (isPlayingBackgroundMedia || isPreparingBackgroundMedia || currentlyReadingExplanationId != null) {
                 Surface(
                     color = EmeraldDark,
                     shadowElevation = 14.dp,
@@ -311,26 +316,28 @@ fun DynamicContentScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f)
-                        ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Surface(color = GoldAccent, shape = CircleShape, modifier = Modifier.size(38.dp)) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(20.dp))
+                                    Icon(
+                                        imageVector = if (currentlyReadingExplanationId != null) Icons.Default.RecordVoiceOver else Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = Color(0xFF0F172A),
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = if (isPreparingBackgroundMedia) "Memuat Audio Background..."
+                                    text = if (currentlyReadingExplanationId != null) "🔊 Sedang Membacakan Penjelasan Materi"
                                     else "🔒 Tetap Hidup Saat Layar Terkunci",
                                     color = GoldAccent,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Black
                                 )
                                 Text(
-                                    text = backgroundMediaTitle,
+                                    text = activeSpeakingTitle ?: backgroundMediaTitle,
                                     color = Color.White,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.ExtraBold,
@@ -345,8 +352,6 @@ fun DynamicContentScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
                             shape = RoundedCornerShape(50)
                         ) {
-                            Icon(Icons.Default.Close, contentDescription = "Stop", tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
                             Text("Stop", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
@@ -360,7 +365,6 @@ fun DynamicContentScreen(
                 .background(OffWhiteBg)
                 .padding(padding)
         ) {
-            // PEMUTAR VIDEO IN-APP (TERBUKA LANGSUNG DI DALAM APLIKASI TANPA KELUAR!)
             AnimatedVisibility(visible = activeInAppVideoItem != null) {
                 activeInAppVideoItem?.let { playingItem ->
                     InAppUniversalVideoPlayerBox(
@@ -375,7 +379,7 @@ fun DynamicContentScreen(
                 }
             }
 
-            if (categoryKey == "iqro") {
+            if (categoryKey == "doa") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -383,112 +387,86 @@ fun DynamicContentScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val tabs = listOf(
-                        0 to "📗 36+ Kartu Iqro",
-                        1 to "📖 Latihan Baca",
-                        2 to "🎵 30 Hijaiyah"
-                    )
-                    tabs.forEach { (index, title) ->
-                        val selected = iqroTabMode == index
+                    listOf(
+                        0 to "🌟 Semua (${items.size})",
+                        1 to "🤲 Doa Harian",
+                        2 to "📜 Hadits Pilihan"
+                    ).forEach { (idx, label) ->
+                        val active = doaHaditsSubTab == idx
                         Surface(
-                            color = if (selected) GoldAccent else Color.White.copy(alpha = 0.15f),
+                            color = if (active) GoldAccent else Color.White.copy(alpha = 0.15f),
                             shape = RoundedCornerShape(50),
-                            modifier = Modifier.weight(1f).clickable { iqroTabMode = index }
+                            modifier = Modifier.weight(1f).clickable { doaHaditsSubTab = idx }
                         ) {
                             Text(
-                                text = title,
+                                text = label,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = if (selected) Color(0xFF0F172A) else Color.White,
+                                color = if (active) Color(0xFF0F172A) else Color.White,
                                 textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 9.dp)
+                                modifier = Modifier.padding(vertical = 8.dp)
                             )
                         }
                     }
                 }
+            }
 
-                if (iqroTabMode == 0 || iqroTabMode == 1) {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth().background(MintSurface)
-                    ) {
-                        items((1..6).toList()) { jilid ->
-                            val isSelected = selectedJilid == jilid
-                            Surface(
-                                color = if (isSelected) EmeraldDark else Color.White,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier
-                                    .border(
-                                        width = if (isSelected) 2.dp else 1.dp,
-                                        color = if (isSelected) GoldAccent else EmeraldPrimary.copy(alpha = 0.3f),
-                                        shape = RoundedCornerShape(14.dp)
-                                    )
-                                    .clickable { selectedJilid = jilid }
-                            ) {
-                                Text(
-                                    text = "📗 Iqro Jilid $jilid",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = if (isSelected) GoldAccent else EmeraldDark,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+            if (categoryKey == "belajar") {
+                val belajarCategories = listOf(
+                    "SEMUA" to "🌟 Semua Materi",
+                    "ADAB" to "🛡️ Adab & Benteng Pergaulan (PENTING!)",
+                    "SHOLAT" to "🕌 Panduan Sholat",
+                    "BACAAN_SHOLAT" to "🤲 Bacaan Sholat",
+                    "WUDHU" to "💧 Wudhu & Bersuci",
+                    "AQIDAH" to "☝️ Rukun Iman & Islam"
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(EmeraldDark)
+                ) {
+                    items(belajarCategories) { (key, label) ->
+                        val active = belajarSubTab == key
+                        val isAdabTab = key == "ADAB"
+                        Surface(
+                            color = when {
+                                active -> GoldAccent
+                                isAdabTab -> Color(0xFFE11D48)
+                                else -> Color.White.copy(alpha = 0.15f)
+                            },
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier
+                                .border(
+                                    width = if (isAdabTab && !active) 1.5.dp else 0.dp,
+                                    color = if (isAdabTab && !active) GoldAccent else Color.Transparent,
+                                    shape = RoundedCornerShape(50)
                                 )
-                            }
-                        }
-                    }
-                }
-
-                if (iqroTabMode == 2) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MintSurface)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val harakatTabs = listOf(
-                            0 to "Fathah (A-Ba)",
-                            1 to "Kasrah (I-Bi)",
-                            2 to "Dhammah (U-Bu)",
-                            3 to "Tanwin (An-Ban)"
-                        )
-                        harakatTabs.forEach { (idx, label) ->
-                            val active = selectedHarakatMode == idx
-                            Surface(
-                                color = if (active) EmeraldDark else Color.White,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f).clickable { selectedHarakatMode = idx }
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = if (active) GoldAccent else EmeraldDark,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                AnimatedVisibility(visible = activeSpeakingTitle != null) {
-                    Surface(color = Color(0xFFFEF3C7), modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .clickable { belajarSubTab = key }
                         ) {
-                            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = EmeraldDark, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = activeSpeakingTitle ?: "",
+                                text = label,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp,
-                                color = EmeraldDark
+                                color = if (active) Color(0xFF0F172A) else Color.White,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                             )
                         }
                     }
                 }
+            }
+
+            if (categoryKey == "iqro") {
+                IqroTopBarTabs(
+                    iqroTabMode = iqroTabMode,
+                    onSelectTabMode = { iqroTabMode = it },
+                    selectedJilid = selectedJilid,
+                    onSelectJilid = { selectedJilid = it },
+                    selectedHarakatMode = selectedHarakatMode,
+                    onSelectHarakat = { selectedHarakatMode = it },
+                    activeSpeakingTitle = activeSpeakingTitle
+                )
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -510,10 +488,10 @@ fun DynamicContentScreen(
                             IqroVisualSoundCard(
                                 item = item,
                                 isBookmarked = item.id == bookmarkedIqroId,
-                                onPlaySound = { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) },
+                                onPlaySound = { playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl) },
                                 onBookmarkClick = { saveIqroBookmark(item) },
                                 onZoomClick = {
-                                    playIqroSound(item.arabicText, item.latinText, item.mediaUrl)
+                                    playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl)
                                     zoomedContent = item
                                 }
                             )
@@ -522,10 +500,8 @@ fun DynamicContentScreen(
                 } else if (categoryKey == "iqro" && iqroTabMode == 1) {
                     IqroReadingSheetGeneratorView(
                         selectedJilid = selectedJilid,
-                        onNextJilid = {
-                            selectedJilid = if (selectedJilid < 6) selectedJilid + 1 else 1
-                        },
-                        onPlaySound = { arab, latin -> playIqroSound(arab, latin) }
+                        onNextJilid = { selectedJilid = if (selectedJilid < 6) selectedJilid + 1 else 1 },
+                        onPlaySound = { arab, latin -> playAuthenticIslamicAudio(arab, latin) }
                     )
                 } else if (categoryKey == "iqro" && iqroTabMode == 2) {
                     val hijaiyahList = remember { get30HijaiyahSoundCards() }
@@ -555,35 +531,117 @@ fun DynamicContentScreen(
                                 soundRead = dispRead,
                                 latinName = card.latinName,
                                 cardColor = card.cardColor,
-                                onTap = { playIqroSound(dispArab, dispRead) }
+                                onTap = { playAuthenticIslamicAudio(dispArab, dispRead) }
                             )
                         }
                     }
                 } else {
-                    // DAFTAR VIDEO & MATERI DENGAN DESKRIPSI TERTUTUP DEFAULT + IN-APP VIDEO PLAYER
+                    val displayedList = remember(items, categoryKey, doaHaditsSubTab, belajarSubTab) {
+                        when (categoryKey) {
+                            "doa" -> when (doaHaditsSubTab) {
+                                1 -> items.filter { !it.title.contains("Hadits", ignoreCase = true) }
+                                2 -> items.filter { it.title.contains("Hadits", ignoreCase = true) }
+                                else -> items
+                            }
+                            "belajar" -> when (belajarSubTab) {
+                                "ADAB" -> items.filter { it.title.contains("[Adab]", ignoreCase = true) }
+                                "SHOLAT" -> items.filter { it.title.contains("[Sholat]", ignoreCase = true) }
+                                "BACAAN_SHOLAT" -> items.filter { it.title.contains("[Bacaan Sholat]", ignoreCase = true) }
+                                "WUDHU" -> items.filter { it.title.contains("[Wudhu]", ignoreCase = true) }
+                                "AQIDAH" -> items.filter { it.title.contains("[Aqidah]", ignoreCase = true) }
+                                else -> items
+                            }
+                            else -> items
+                        }
+                    }
+
                     LazyColumn(
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        items(items, key = { it.id }) { item ->
+                        if (categoryKey == "belajar") {
+                            item {
+                                Card(
+                                    shape = RoundedCornerShape(22.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF881337)),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(2.dp, GoldAccent, RoundedCornerShape(22.dp))
+                                        .clickable {
+                                            belajarSubTab = if (belajarSubTab == "ADAB") "SEMUA" else "ADAB"
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier
+                                                .size(50.dp)
+                                                .clip(CircleShape)
+                                                .background(GoldAccent)
+                                        ) {
+                                            Text("🛡️", fontSize = 26.sp)
+                                        }
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Surface(color = GoldAccent, shape = RoundedCornerShape(50)) {
+                                                Text(
+                                                    text = "⚠️ PERISAI AKHLAK & BENTENG REMAJA MUSLIM",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Black,
+                                                    color = Color(0xFF0F172A),
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Utamakan Adab Sebelum Ilmu & Jauhi Pergaulan Bebas (Zina)",
+                                                fontWeight = FontWeight.Black,
+                                                fontSize = 14.sp,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                text = if (belajarSubTab == "ADAB") "Menampilkan khusus materi Adab & Benteng Pergaulan (Ketuk untuk lihat semua)"
+                                                else "👉 Ketuk di sini untuk fokus membuka 10 Materi Adab & Benteng Diri!",
+                                                fontSize = 11.sp,
+                                                color = GoldAccent,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        items(displayedList, key = { it.id }) { item ->
                             val isVideoCategory = categoryKey == "video" ||
                                     extractYoutubeVideoId(item.mediaUrl) != null ||
                                     item.mediaUrl.contains(".mp4", ignoreCase = true)
 
-                            // DESKRIPSI DEFAULT TERTUTUP (false) -> Baru muncul saat diklik "Buka Deskripsi"!
+                            val isAdabHighlighted = item.title.contains("[Adab]", ignoreCase = true)
                             val isDescOpen = expandedDescriptionIds[item.id] ?: false
+                            val isReadingThisDesc = (currentlyReadingExplanationId == item.id)
                             val previewBannerUrl = extractMediaPreviewUrl(item.mediaUrl)
+                            val hasQariMp3 = item.mediaUrl.contains(".mp3", ignoreCase = true)
 
                             Card(
                                 shape = RoundedCornerShape(24.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isAdabHighlighted) Color(0xFFFFFBEB) else Color.White
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = if (isAdabHighlighted) 5.dp else 3.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .border(1.dp, MintSurface, RoundedCornerShape(24.dp))
+                                    .border(
+                                        width = if (isAdabHighlighted) 2.dp else 1.dp,
+                                        color = if (isAdabHighlighted) Color(0xFFD97706) else MintSurface,
+                                        shape = RoundedCornerShape(24.dp)
+                                    )
                             ) {
                                 Column {
-                                    // 1. BANNER VISUAL VIDEO / GAMBAR (KLIK LANGSUNG PUTAR DI DALAM APLIKASI!)
                                     if (previewBannerUrl.isNotBlank() || isVideoCategory) {
                                         Box(
                                             contentAlignment = Alignment.Center,
@@ -633,26 +691,10 @@ fun DynamicContentScreen(
                                                         )
                                                     }
                                                 }
-                                                Surface(
-                                                    color = Color.Black.copy(alpha = 0.75f),
-                                                    shape = RoundedCornerShape(50),
-                                                    modifier = Modifier
-                                                        .align(Alignment.BottomEnd)
-                                                        .padding(12.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "▶ Putar Langsung di Aplikasi",
-                                                        color = GoldAccent,
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.ExtraBold,
-                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                                    )
-                                                }
                                             }
                                         }
                                     }
 
-                                    // 2. BAGIAN JUDUL & TOMBOL KONTROL
                                     Column(modifier = Modifier.padding(16.dp)) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -660,38 +702,65 @@ fun DynamicContentScreen(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Column(modifier = Modifier.weight(1f)) {
-                                                if (isVideoCategory && item.latinText.isNotBlank()) {
-                                                    Text(
-                                                        text = "📺 ${item.latinText}",
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.ExtraBold,
-                                                        color = EmeraldPrimary
-                                                    )
-                                                    Spacer(modifier = Modifier.height(2.dp))
+                                                if (isAdabHighlighted) {
+                                                    Surface(color = Color(0xFFE11D48), shape = RoundedCornerShape(50)) {
+                                                        Text(
+                                                            text = "🛡️ UTAMAKAN ADAB & BENTENG AKHLAK",
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.Black,
+                                                            color = Color.White,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.height(5.dp))
+                                                } else if (hasQariMp3) {
+                                                    Surface(color = Color(0xFFD1FAE5), shape = RoundedCornerShape(50)) {
+                                                        Text(
+                                                            text = "🎙️ Suara Qari Syaikh Al-Afasy",
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Black,
+                                                            color = EmeraldDark,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.height(4.dp))
                                                 }
+
                                                 Text(
                                                     text = item.title,
                                                     fontWeight = FontWeight.ExtraBold,
                                                     fontSize = 16.sp,
-                                                    color = EmeraldDark
+                                                    color = if (isAdabHighlighted) Color(0xFF881337) else EmeraldDark
                                                 )
                                             }
 
                                             if (item.arabicText.isNotBlank()) {
-                                                FilledTonalIconButton(
-                                                    onClick = { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) }
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Surface(
+                                                    color = GoldAccent,
+                                                    shape = RoundedCornerShape(50),
+                                                    modifier = Modifier.clickable {
+                                                        playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl)
+                                                    }
                                                 ) {
-                                                    Icon(Icons.Default.VolumeUp, contentDescription = "Suara", tint = EmeraldDark)
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.VolumeUp, contentDescription = "Suara Arab", tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Lafadz", fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF0F172A))
+                                                    }
                                                 }
                                             }
                                         }
 
-                                        // Teks Arab & Latin selalu tampil untuk Doa/Tajwid/Belajar agar mudah dibaca
                                         if (item.arabicText.isNotBlank()) {
-                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Spacer(modifier = Modifier.height(12.dp))
                                             Text(
                                                 text = item.arabicText,
-                                                fontSize = 26.sp,
+                                                fontSize = 27.sp,
+                                                lineHeight = 46.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = EmeraldDark,
                                                 textAlign = TextAlign.End,
@@ -705,7 +774,6 @@ fun DynamicContentScreen(
 
                                         Spacer(modifier = Modifier.height(12.dp))
 
-                                        // BARIS TOMBOL AKSI: PUTAR IN-APP, MODE LAYAR TERKUNCI, & BUKA DESKRIPSI
                                         if (isVideoCategory) {
                                             Row(
                                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -744,9 +812,8 @@ fun DynamicContentScreen(
                                             Spacer(modifier = Modifier.height(8.dp))
                                         }
 
-                                        // TOMBOL BUKA / TUTUP DESKRIPSI
                                         Surface(
-                                            color = if (isDescOpen) EmeraldDark else MintSurface,
+                                            color = if (isDescOpen) EmeraldDark else if (isAdabHighlighted) Color(0xFFFEF08A) else MintSurface,
                                             shape = RoundedCornerShape(12.dp),
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -758,7 +825,7 @@ fun DynamicContentScreen(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
-                                                    text = if (isDescOpen) "📖 Tutup Deskripsi & Penjelasan" else "📖 Buka Deskripsi & Penjelasan",
+                                                    text = if (isDescOpen) "📖 Tutup Arti & Penjelasan" else "📖 Buka Arti & Penjelasan (+ Suara Penjelasan 🔊)",
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.ExtraBold,
                                                     color = if (isDescOpen) GoldAccent else EmeraldDark
@@ -771,38 +838,48 @@ fun DynamicContentScreen(
                                             }
                                         }
 
-                                        // ISI DESKRIPSI (BARU MUNCUL KETIKA DITEKAN!)
                                         AnimatedVisibility(visible = isDescOpen) {
                                             Column(modifier = Modifier.padding(top = 10.dp)) {
                                                 Surface(
                                                     color = OffWhiteBg,
-                                                    shape = RoundedCornerShape(14.dp),
+                                                    shape = RoundedCornerShape(16.dp),
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .border(1.dp, MintSurface, RoundedCornerShape(14.dp))
+                                                        .border(1.5.dp, if (isAdabHighlighted) GoldAccent else MintSurface, RoundedCornerShape(16.dp))
                                                 ) {
                                                     Column(modifier = Modifier.padding(14.dp)) {
+                                                        Button(
+                                                            onClick = { toggleReadIndonesianExplanation(item) },
+                                                            colors = ButtonDefaults.buttonColors(
+                                                                containerColor = if (isReadingThisDesc) Color(0xFFE11D48) else GoldAccent
+                                                            ),
+                                                            shape = RoundedCornerShape(50),
+                                                            modifier = Modifier.fillMaxWidth()
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = if (isReadingThisDesc) Icons.Default.Stop else Icons.Default.RecordVoiceOver,
+                                                                contentDescription = null,
+                                                                tint = if (isReadingThisDesc) Color.White else Color(0xFF0F172A),
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Text(
+                                                                text = if (isReadingThisDesc) "⏹️ Hentikan Suara Penjelasan"
+                                                                else "🔊 Putar Suara Penjelasan & Nasihat Ini",
+                                                                color = if (isReadingThisDesc) Color.White else Color(0xFF0F172A),
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 12.sp
+                                                            )
+                                                        }
+
+                                                        Spacer(modifier = Modifier.height(12.dp))
+
                                                         Text(
-                                                            text = item.description.ifBlank { "Tidak ada deskripsi tambahan." },
+                                                            text = item.description.ifBlank { "Tidak ada penjelasan tambahan." },
                                                             fontSize = 14.sp,
                                                             color = Color(0xFF1E293B),
-                                                            lineHeight = 21.sp
+                                                            lineHeight = 22.sp
                                                         )
-                                                        if (item.mediaUrl.isNotBlank()) {
-                                                            Spacer(modifier = Modifier.height(10.dp))
-                                                            TextButton(
-                                                                onClick = {
-                                                                    try {
-                                                                        val cleanUrl = item.mediaUrl.split("|").last { it.isNotBlank() }
-                                                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cleanUrl)))
-                                                                    } catch (_: Exception) {}
-                                                                }
-                                                            ) {
-                                                                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
-                                                                Spacer(modifier = Modifier.width(4.dp))
-                                                                Text("Buka di Aplikasi YouTube Eksternal ↗", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                            }
-                                                        }
                                                     }
                                                 }
                                             }
@@ -818,85 +895,23 @@ fun DynamicContentScreen(
     }
 
     if (zoomedContent != null) {
-        val item = zoomedContent!!
-        val imagePart = extractMediaPreviewUrl(item.mediaUrl)
-        AlertDialog(
-            onDismissRequest = { zoomedContent = null },
-            title = { Text(item.title, fontWeight = FontWeight.ExtraBold, color = EmeraldDark, fontSize = 16.sp) },
-            text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (imagePart.isNotBlank()) {
-                        NetworkImageLoader(
-                            imageUrl = imagePart,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(220.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .clickable { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) }
-                        )
-                    } else {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(150.dp)
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(Color(0xFFFEF3C7))
-                                .border(2.dp, GoldAccent, RoundedCornerShape(18.dp))
-                                .clickable { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) }
-                        ) {
-                            Text(
-                                text = item.arabicText.ifBlank { "أَ بَ تَ" },
-                                fontSize = 40.sp,
-                                fontWeight = FontWeight.Black,
-                                color = EmeraldDark,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(
-                            onClick = { playIqroSound(item.arabicText, item.latinText, item.mediaUrl) },
-                            colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
-                            shape = RoundedCornerShape(50),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Suara", color = Color(0xFF0F172A), fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
-                        }
-
-                        Button(
-                            onClick = { saveIqroBookmark(item) },
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                            shape = RoundedCornerShape(50),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Bookmark, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Tandai Mengaji", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
-                        }
-                    }
-
-                    Text("Cara Baca: ${item.latinText}", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = EmeraldPrimary)
-                    Text(item.description, fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.DarkGray)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { zoomedContent = null }) { Text("Tutup 🌟", fontWeight = FontWeight.Bold) }
-            }
+        IqroZoomDialog(
+            item = zoomedContent!!,
+            onPlaySound = { playAuthenticIslamicAudio(zoomedContent!!.arabicText, zoomedContent!!.latinText, zoomedContent!!.mediaUrl) },
+            onBookmark = { saveIqroBookmark(zoomedContent!!) },
+            onDismiss = { zoomedContent = null }
         )
     }
 }
 
-// =========================================================================
-// KOMPONEN PEMUTAR VIDEO LANGSUNG DI DALAM APLIKASI (IN-APP PLAYER)
-// =========================================================================
+fun normalizeArabicForAuthenticRecitation(rawArabic: String): String {
+    val trimmed = rawArabic.trim()
+    if (trimmed.length == 2 && (trimmed[1] == '\u064E' || trimmed[1] == '\u0650' || trimmed[1] == '\u064F')) {
+        return "${trimmed}هْ"
+    }
+    return trimmed.replace(Regex("\\s{2,}"), " ، ")
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun InAppUniversalVideoPlayerBox(
@@ -946,7 +961,6 @@ fun InAppUniversalVideoPlayerBox(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
-            // Bar Atas Player
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -980,7 +994,6 @@ fun InAppUniversalVideoPlayerBox(
                 }
             }
 
-            // Layar Video 16:9 di Dalam Aplikasi
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -1006,7 +1019,6 @@ fun InAppUniversalVideoPlayerBox(
                     .aspectRatio(16f / 9f)
             )
 
-            // Tombol Pintas Beralih ke Mode Layar Terkunci
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1036,495 +1048,5 @@ fun InAppUniversalVideoPlayerBox(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun IqroReadingSheetGeneratorView(
-    selectedJilid: Int,
-    onNextJilid: () -> Unit,
-    onPlaySound: (String, String) -> Unit
-) {
-    var seed by remember { mutableStateOf(1) }
-    var showLatinHelper by remember { mutableStateOf(true) }
-
-    val readingRows = remember(selectedJilid, seed) {
-        generateIqroReadingRows(selectedJilid, rowCount = 12)
-    }
-
-    val jilidInstruction = remember(selectedJilid) {
-        when (selectedJilid) {
-            1 -> "Jilid 1: Bacalah huruf Fathah dari KANAN ke KIRI dengan pendek & jelas. Ketuk huruf jika lupa bunyinya!"
-            2 -> "Jilid 2: Latihan huruf sambung & bacaan panjang (Mad Alif 2 ketukan)."
-            3 -> "Jilid 3: Latihan baris Kasrah (i), Dhammah (u), serta bacaan panjang Ya & Wawu sukun."
-            4 -> "Jilid 4: Latihan Tanwin (an-in-un), Sukun, dan pantulan huruf Qalqalah."
-            5 -> "Jilid 5: Latihan Alif Lam Syamsiyah, Tasydid, dan dengung Ghunnah (2 harakat)."
-            else -> "Jilid 6: Latihan hukum Tajwid (Idgham, Iqlab, Ikhfa) & potongan kalimat Al-Quran."
-        }
-    }
-
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        item {
-            Card(
-                shape = RoundedCornerShape(22.dp),
-                colors = CardDefaults.cardColors(containerColor = EmeraldDark),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("📖 Lembar Latihan Baca Iqro $selectedJilid", color = GoldAccent, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                        Surface(
-                            color = Color.White.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(50),
-                            modifier = Modifier.clickable { showLatinHelper = !showLatinHelper }
-                        ) {
-                            Text(
-                                text = if (showLatinHelper) "🙈 Tutup Latin" else "👁️ Lihat Latin",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
-                        }
-                    }
-
-                    Text(jilidInstruction, color = Color.White, fontSize = 12.sp, lineHeight = 17.sp)
-
-                    Button(
-                        onClick = { seed++ },
-                        colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
-                        shape = RoundedCornerShape(50),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, tint = Color(0xFF0F172A))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Acak & Buat Halaman Huruf Baru 🔄", color = Color(0xFF0F172A), fontWeight = FontWeight.Black, fontSize = 13.sp)
-                    }
-                }
-            }
-        }
-
-        items(readingRows.size) { rowIndex ->
-            val rowTokens = readingRows[rowIndex]
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Baris ${rowIndex + 1} • Baca dari Kanan ke Kiri ⬅️", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldPrimary)
-                        Text("🔊 Ketuk kotak untuk suara", fontSize = 10.sp, color = Color.Gray)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        rowTokens.forEach { token ->
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFFFFFBEB))
-                                    .border(1.5.dp, GoldAccent.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-                                    .clickable { onPlaySound(token.arabic, token.latin) }
-                                    .padding(vertical = 12.dp, horizontal = 4.dp)
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(
-                                        text = token.arabic,
-                                        fontSize = if (selectedJilid <= 2) 30.sp else 24.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = EmeraldDark,
-                                        textAlign = TextAlign.Center
-                                    )
-                                    if (showLatinHelper) {
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(token.latin, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = EmeraldPrimary, textAlign = TextAlign.Center)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = { seed++ },
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("🔄 Acak Lagi", fontWeight = FontWeight.ExtraBold, color = EmeraldDark)
-                }
-                Button(
-                    onClick = onNextJilid,
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = if (selectedJilid < 6) "Lanjut Iqro Jilid ${selectedJilid + 1} ➔" else "Kembali ke Jilid 1 ➔",
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color.White
-                    )
-                }
-            }
-        }
-    }
-}
-
-fun generateIqroReadingRows(jilid: Int, rowCount: Int): List<List<IqroReadingToken>> {
-    val pool: List<IqroReadingToken> = when (jilid) {
-        1 -> listOf(
-            IqroReadingToken("أَ", "A"), IqroReadingToken("بَ", "Ba"), IqroReadingToken("تَ", "Ta"),
-            IqroReadingToken("ثَ", "Tsa"), IqroReadingToken("جَ", "Ja"), IqroReadingToken("حَ", "Ha"),
-            IqroReadingToken("خَ", "Kho"), IqroReadingToken("دَ", "Da"), IqroReadingToken("ذَ", "Dza"),
-            IqroReadingToken("رَ", "Ro"), IqroReadingToken("زَ", "Za"), IqroReadingToken("سَ", "Sa"),
-            IqroReadingToken("شَ", "Sya"), IqroReadingToken("صَ", "Sho"), IqroReadingToken("ضَ", "Dho"),
-            IqroReadingToken("طَ", "Tho"), IqroReadingToken("ظَ", "Zho"), IqroReadingToken("عَ", "'A"),
-            IqroReadingToken("غَ", "Gho"), IqroReadingToken("فَ", "Fa"), IqroReadingToken("قَ", "Qo"),
-            IqroReadingToken("كَ", "Ka"), IqroReadingToken("لَ", "La"), IqroReadingToken("مَ", "Ma"),
-            IqroReadingToken("نَ", "Na"), IqroReadingToken("وَ", "Wa"), IqroReadingToken("هَ", "Ha"),
-            IqroReadingToken("يَ", "Ya")
-        )
-        2 -> listOf(
-            IqroReadingToken("بَتَ", "Ba-Ta"), IqroReadingToken("تَبَ", "Ta-Ba"), IqroReadingToken("ثَبَتَ", "Tsa-Ba-Ta"),
-            IqroReadingToken("نَبَتَ", "Na-Ba-Ta"), IqroReadingToken("بَا", "Baa"), IqroReadingToken("تَا", "Taa"),
-            IqroReadingToken("مَا", "Maa"), IqroReadingToken("لاَ", "Laa"), IqroReadingToken("كَتَبَ", "Ka-Ta-Ba"),
-            IqroReadingToken("كَاتَبَ", "Kaa-Ta-Ba"), IqroReadingToken("جَلَسَ", "Ja-La-Sa"), IqroReadingToken("فَتَحَ", "Fa-Ta-Ha"),
-            IqroReadingToken("صَدَقَ", "Sho-Da-Qo"), IqroReadingToken("قَالَ", "Qoo-La"), IqroReadingToken("كَانَ", "Kaa-Na"),
-            IqroReadingToken("زَادَ", "Zaa-Da"), IqroReadingToken("نَصَرَ", "Na-Sho-Ro"), IqroReadingToken("عَبَدَ", "'A-Ba-Da")
-        )
-        3 -> listOf(
-            IqroReadingToken("بِ", "Bi"), IqroReadingToken("تِ", "Ti"), IqroReadingToken("بِي", "Bii"),
-            IqroReadingToken("تِي", "Tii"), IqroReadingToken("فِيهِ", "Fii-Hi"), IqroReadingToken("بُ", "Bu"),
-            IqroReadingToken("تُ", "Tu"), IqroReadingToken("بُو", "Buu"), IqroReadingToken("تُو", "Tuu"),
-            IqroReadingToken("كُتِبَ", "Ku-Ti-Ba"), IqroReadingToken("قُرِئَ", "Qu-Ri-A"), IqroReadingToken("سَمِعَ", "Sa-Mi-'A"),
-            IqroReadingToken("عَلِمَ", "'A-Li-Ma"), IqroReadingToken("يَقُولُ", "Ya-Quu-Lu"), IqroReadingToken("يُوصِي", "Yuu-Shii"),
-            IqroReadingToken("رُسُلُ", "Ru-Su-Lu"), IqroReadingToken("هُدِيَ", "Hu-Di-Ya"), IqroReadingToken("نُورِي", "Nuu-Rii")
-        )
-        4 -> listOf(
-            IqroReadingToken("بً", "Ban"), IqroReadingToken("بٍ", "Bin"), IqroReadingToken("بٌ", "Bun"),
-            IqroReadingToken("كِتَابًا", "Kitaaban"), IqroReadingToken("عَلِيمٌ", "'Aliimun"), IqroReadingToken("حَكِيمٍ", "Hakiimin"),
-            IqroReadingToken("أَبْ", "Ab'"), IqroReadingToken("أَجْ", "Aj'"), IqroReadingToken("أَدْ", "Ad'"),
-            IqroReadingToken("أَقْ", "Aq'"), IqroReadingToken("أَطْ", "Ath'"), IqroReadingToken("مَسْجِدٌ", "Masjidun"),
-            IqroReadingToken("يَعْلَمُ", "Ya'lamu"), IqroReadingToken("أَنْعَمْتَ", "An'amta"), IqroReadingToken("مُسْلِمٌ", "Muslimun"),
-            IqroReadingToken("أَحَدٌ", "Ahadun"), IqroReadingToken("صَمَدٌ", "Shomadun"), IqroReadingToken("كُفُوًا", "Kufuwan")
-        )
-        5 -> listOf(
-            IqroReadingToken("إِنَّ", "In-na"), IqroReadingToken("عَمَّ", "'Am-ma"), IqroReadingToken("جَنَّةٌ", "Jan-natun"),
-            IqroReadingToken("الْحَمْدُ", "Al-Hamdu"), IqroReadingToken("الْقَمَرُ", "Al-Qamaru"), IqroReadingToken("الشَّمْسُ", "Asy-Syamsu"),
-            IqroReadingToken("الرَّحْمَنُ", "Ar-Rahmaanu"), IqroReadingToken("النَّاسِ", "An-Naasi"), IqroReadingToken("اللَّهُ", "Allaahu"),
-            IqroReadingToken("رَبِّ", "Rab-bi"), IqroReadingToken("سُبِّحَ", "Sub-biha"), IqroReadingToken("قُدِّرَ", "Qud-dira"),
-            IqroReadingToken("إِيَّاكَ", "Iy-yaaka"), IqroReadingToken("الصِّرَاطَ", "Ash-Shiraatho"), IqroReadingToken("الضَّالِّينَ", "Adh-Dhool-liina")
-        )
-        else -> listOf(
-            IqroReadingToken("مَنْ يَقُولُ", "May-yaquulu"), IqroReadingToken("مِنْ مَالٍ", "Mim-maalin"),
-            IqroReadingToken("مِنْ بَعْدِ", "Mim-ba'di"), IqroReadingToken("سَمِيعٌ بَصِيرٌ", "Samii'um-bashiir"),
-            IqroReadingToken("مِنْ شَرِّ", "Min-syarri"), IqroReadingToken("أَنْفُسِهِمْ", "An-fusihim"),
-            IqroReadingToken("مِنْ رَبِّهِمْ", "Mir-rabbihim"), IqroReadingToken("غَفُورٌ رَحِيمٌ", "Ghafuurur-rahiim"),
-            IqroReadingToken("لَمْ يَلِدْ", "Lam yalid'"), IqroReadingToken("وَلَمْ يُولَدْ", "Wa lam yuulad'"),
-            IqroReadingToken("فَسَبِّحْ", "Fasabbih"), IqroReadingToken("وَاسْتَغْفِرْهُ", "Wastaghfirhu")
-        )
-    }
-
-    val columnsPerRow = if (jilid <= 4) 4 else 3
-    return List(rowCount) {
-        List(columnsPerRow) {
-            pool[Random.nextInt(pool.size)]
-        }
-    }
-}
-
-@Composable
-fun IqroVisualSoundCard(
-    item: ServerContent,
-    isBookmarked: Boolean,
-    onPlaySound: () -> Unit,
-    onBookmarkClick: () -> Unit,
-    onZoomClick: () -> Unit
-) {
-    val imagePart = extractMediaPreviewUrl(item.mediaUrl)
-    val iqroPandaBitmap = rememberOptimizedIcon(R.drawable.ic_menu_iqro, 90)
-
-    Card(
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isBookmarked) Color(0xFFFEF3C7) else Color.White
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = if (isBookmarked) 2.5.dp else 1.5.dp,
-                color = if (isBookmarked) Color(0xFFD97706) else MintSurface,
-                shape = RoundedCornerShape(22.dp)
-            )
-            .clickable(onClick = onPlaySound)
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                if (imagePart.isNotBlank()) {
-                    NetworkImageLoader(
-                        imageUrl = imagePart,
-                        modifier = Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(16.dp))
-                    )
-                } else {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFFFEF9C3))
-                            .border(2.dp, GoldAccent, RoundedCornerShape(16.dp))
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Image(
-                                bitmap = iqroPandaBitmap,
-                                contentDescription = null,
-                                modifier = Modifier.size(30.dp).clip(CircleShape)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = item.arabicText.ifBlank { "أَ بَ تَ" },
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Black,
-                                color = EmeraldDark,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-
-                Surface(
-                    color = if (isBookmarked) Color(0xFFD97706) else Color.White.copy(alpha = 0.9f),
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                        .size(30.dp)
-                        .clickable { onBookmarkClick() }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                            contentDescription = "Tandai Mengaji",
-                            tint = if (isBookmarked) Color.White else EmeraldDark,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-
-                Surface(
-                    color = GoldAccent,
-                    shape = CircleShape,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(30.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.VolumeUp, contentDescription = null, tint = EmeraldDark, modifier = Modifier.size(16.dp))
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(item.title, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, color = EmeraldDark, textAlign = TextAlign.Center, maxLines = 1)
-            Text(item.latinText, fontWeight = FontWeight.Bold, fontSize = 11.sp, color = EmeraldPrimary, textAlign = TextAlign.Center, maxLines = 1)
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                Surface(
-                    color = EmeraldPrimary,
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.weight(1f).clickable { onPlaySound() }
-                ) {
-                    Text("🔊 Bunyi", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 5.dp))
-                }
-                Surface(
-                    color = if (isBookmarked) Color(0xFFD97706) else MintSurface,
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.weight(1f).clickable { onBookmarkClick() }
-                ) {
-                    Text(
-                        text = if (isBookmarked) "📌 Ditandai" else "🔖 Tandai",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = if (isBookmarked) Color.White else EmeraldDark,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(vertical = 5.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HijaiyahInteractiveTile(
-    arabic: String,
-    soundRead: String,
-    latinName: String,
-    cardColor: Color,
-    onTap: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(2.dp, Color.White, RoundedCornerShape(20.dp))
-            .clickable(onClick = onTap)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(text = arabic, fontSize = 34.sp, fontWeight = FontWeight.Black, color = EmeraldDark)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(text = soundRead, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = EmeraldPrimary)
-            Text(text = "($latinName)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-        }
-    }
-}
-
-fun get30HijaiyahSoundCards(): List<HijaiyahSoundCard> {
-    val colors = listOf(
-        Color(0xFFFEF9C3), Color(0xFFD1FAE5), Color(0xFFE0F2FE),
-        Color(0xFFFCE7F3), Color(0xFFEDE9FE), Color(0xFFFFEDD5)
-    )
-    data class RawH(val base: String, val name: String, val f: String, val k: String, val d: String, val t: String)
-    val list = listOf(
-        RawH("ا", "Alif", "A", "I", "U", "An"),
-        RawH("ب", "Ba", "Ba", "Bi", "Bu", "Ban"),
-        RawH("ت", "Ta", "Ta", "Ti", "Tu", "Tan"),
-        RawH("ث", "Tsa", "Tsa", "Tsi", "Tsu", "Tsan"),
-        RawH("ج", "Jim", "Ja", "Ji", "Ju", "Jan"),
-        RawH("ح", "Ha", "Ha", "Hi", "Hu", "Han"),
-        RawH("خ", "Kho", "Kho", "Khi", "Khu", "Khon"),
-        RawH("د", "Dal", "Da", "Di", "Du", "Dan"),
-        RawH("ذ", "Dzal", "Dza", "Dzi", "Dzu", "Dzan"),
-        RawH("ر", "Ro", "Ro", "Ri", "Ru", "Ron"),
-        RawH("ز", "Zay", "Za", "Zi", "Zu", "Zan"),
-        RawH("س", "Sin", "Sa", "Si", "Su", "San"),
-        RawH("ش", "Syin", "Sya", "Syi", "Syu", "Syan"),
-        RawH("ص", "Shod", "Sho", "Shi", "Shu", "Shon"),
-        RawH("ض", "Dhod", "Dho", "Dhi", "Dhu", "Dhon"),
-        RawH("ط", "Tho", "Tho", "Thi", "Thu", "Thon"),
-        RawH("ظ", "Zho", "Zho", "Zhi", "Zhu", "Zhon"),
-        RawH("ع", "Ain", "'A", "'I", "'U", "'An"),
-        RawH("غ", "Ghain", "Gho", "Ghi", "Ghu", "Ghon"),
-        RawH("ف", "Fa", "Fa", "Fi", "Fu", "Fan"),
-        RawH("ق", "Qof", "Qo", "Qi", "Qu", "Qon"),
-        RawH("ك", "Kaf", "Ka", "Ki", "Ku", "Kan"),
-        RawH("ل", "Lam", "La", "Li", "Lu", "Lan"),
-        RawH("م", "Mim", "Ma", "Mi", "Mu", "Man"),
-        RawH("ن", "Nun", "Na", "Ni", "Nu", "Nan"),
-        RawH("و", "Wawu", "Wa", "Wi", "Wu", "Wan"),
-        RawH("هـ", "Ha Besar", "Ha", "Hi", "Hu", "Han"),
-        RawH("لا", "Lam Alif", "Laa", "Lii", "Luu", "Lan"),
-        RawH("ء", "Hamzah", "A", "I", "U", "An"),
-        RawH("ي", "Ya", "Ya", "Yi", "Yu", "Yan")
-    )
-    return list.mapIndexed { idx, r ->
-        HijaiyahSoundCard(
-            baseLetter = r.base,
-            fathah = "${r.base}\u064E",
-            kasrah = "${r.base}\u0650",
-            dhammah = "${r.base}\u064F",
-            tanwin = "${r.base}\u064B",
-            latinName = r.name,
-            readFathah = r.f,
-            readKasrah = r.k,
-            readDhammah = r.d,
-            readTanwin = r.t,
-            cardColor = colors[idx % colors.size]
-        )
-    }
-}
-
-fun getBuiltInFallbackContents(category: String): List<ServerContent> {
-    return when (category) {
-        "iqro" -> listOf(
-            ServerContent(901, "Iqro 1 • Hal 1 (Alif - Ba)", "أَ   بَ", "A  —  Ba", "Mulut terbuka saat 'A' dan bibir merapat saat 'Ba'.", "", 1),
-            ServerContent(902, "Iqro 1 • Hal 2 (Ba - Ta - Tsa)", "بَ   تَ   ثَ", "Ba — Ta — Tsa", "Titik satu di bawah Ba, titik dua di atas Ta, titik tiga di atas Tsa.", "", 1),
-            ServerContent(903, "Iqro 1 • Hal 3 (Jim - Ha - Kho)", "جَ   حَ   خَ", "Ja — Ha — Kho", "Jim bertitik di tengah, Ha bersih di tenggorokan, Kho sedikit bergetar.", "", 1),
-            ServerContent(904, "Iqro 1 • Hal 4 (Dal - Dzal)", "دَ   ذَ   جَدَ", "Da — Dza — Ja-Da", "Sentuhkan ujung lidah ke gigi seri atas untuk huruf Dza.", "", 1),
-            ServerContent(905, "Iqro 1 • Hal 5 (Ro - Za)", "رَ   زَ   رَزَ", "Ro — Za — Ro-Za", "Huruf Ro bergetar tebal, sedangkan Za berdesis halus.", "", 1),
-            ServerContent(906, "Iqro 1 • Hal 6 (Sin - Syin)", "سَ   شَ   سَحَ", "Sa — Sya — Sa-Ha", "Bedakan desis tipis Sin (Sa) dan hembusan lebar Syin (Sya).", "", 1),
-            ServerContent(907, "Iqro 1 • Hal 7 (Shod - Dhod - Tho - Zho)", "صَ   ضَ   طَ   ظَ", "Sho — Dho — Tho — Zho", "Keempat huruf ini dibaca tebal (Isti'la) memenuhi rongga mulut.", "", 1),
-            ServerContent(908, "Iqro 1 • Hal 8 (Ain s/d Ya)", "عَ  غَ  فَ  قَ  كَ  لَ  مَ  نَ  وَ  هَ  يَ", "'A - Gho - Fa - Qo - Ka - La - Ma - Na - Wa - Ha - Ya", "Penutup Iqro Jilid 1! Pastikan semua huruf Fathah terbaca tegas.", "", 1),
-            ServerContent(921, "Iqro 2 • Hal 1 (Sambung Ba-Ta)", "بَتَ   تَبَ", "Ba-Ta  —  Ta-Ba", "Mengenal bentuk huruf Ba dan Ta ketika disambung.", "", 2),
-            ServerContent(922, "Iqro 2 • Hal 2 (Sambung 3 Huruf)", "نَبَتَ   ثَبَتَ", "Na-Ba-Ta — Tsa-Ba-Ta", "Bacalah pendek setiap huruf yang disambung.", "", 2),
-            ServerContent(923, "Iqro 2 • Hal 3 (Sambung Jim-Ha-Kho)", "جَحَدَ   خَرَجَ", "Ja-Ha-Da — Kho-Ro-Ja", "Kepala huruf Jim, Ha, Kho tetap terlihat jelas saat disambung.", "", 2),
-            ServerContent(924, "Iqro 2 • Hal 4 (Sambung Ain-Ghain-Fa-Qof)", "عَمَلَ   فَتَحَ", "'A-Ma-La — Fa-Ta-Ha", "Perhatikan bentuk huruf Ain dan Fa ketika berada di awal kata.", "", 2),
-            ServerContent(925, "Iqro 2 • Hal 5 (Mad Panjang Alif)", "بَا   تَا   مَا   لاَ", "Baa — Taa — Maa — Laa", "Setiap Fathah diikuti Alif mati wajib dipanjangkan 2 harakat.", "", 2),
-            ServerContent(926, "Iqro 2 • Hal 6 (Ayat Pendek vs Panjang)", "كَتَبَ   كَاتَبَ   صَدَقَ   صَادَقَ", "Ka-Ta-Ba  vs  Kaa-Ta-Ba", "Ujian Iqro 2: Jangan memanjangkan huruf yang tidak memiliki Alif!", "", 2),
-            ServerContent(931, "Iqro 3 • Hal 1 (Baris Kasrah i-bi-ti)", "إِ   بِ   تِ   ثِ", "I — Bi — Ti — Tsi", "Garis di bawah huruf menghasilkan bunyi vokal 'i' pendek.", "", 3),
-            ServerContent(932, "Iqro 3 • Hal 2 (Latihan Kata Kasrah)", "عَمِلَ   سَمِعَ   حَمِدَ", "'A-Mi-La — Sa-Mi-'A — Ha-Mi-Da", "Jaga agar huruf Kasrah tidak memantul atau miring ke bunyi 'e'.", "", 3),
-            ServerContent(933, "Iqro 3 • Hal 3 (Mad Ya Sukun Panjang)", "بِي   تِي   فِيهِ   دِينِي", "Bii — Tii — Fii-Hi — Dii-Nii", "Kasrah diikuti Ya sukun dibaca panjang 2 harakat.", "", 3),
-            ServerContent(934, "Iqro 3 • Hal 4 (Baris Dhammah u-bu-tu)", "أُ   بُ   تُ   ثُ", "U — Bu — Tu — Tsu", "Bibirmu maju membulat saat mengucapkan baris Dhammah (u).", "", 3),
-            ServerContent(935, "Iqro 3 • Hal 5 (Kata Gabungan 3 Harakat)", "كُتِبَ   قُرِئَ   فُتِحَ", "Ku-Ti-Ba — Qu-Ri-A — Fu-Ti-Ha", "Gabungan Dhammah, Kasrah, dan Fathah dalam satu kata.", "", 3),
-            ServerContent(936, "Iqro 3 • Hal 6 (Mad Wawu Sukun Panjang)", "بُو   تُو   يَقُولُ   رَسُولُ", "Buu — Tuu — Ya-Quu-Lu — Ro-Suu-Lu", "Dhammah diikuti Wawu sukun dibaca panjang 2 harakat.", "", 3),
-            ServerContent(941, "Iqro 4 • Hal 1 (Fathatain -an)", "بً   تً   كِتَابًا   هُدًى", "Ban — Tan — Ki-Taa-Ban — Hu-Dan", "Baris dua di atas berbunyi '-an'.", "", 4),
-            ServerContent(942, "Iqro 4 • Hal 2 (Kasratain -in)", "بٍ   تٍ   عَلِيمٍ   حَكِيمٍ", "Bin — Tin — 'A-Lii-Min — Ha-Kii-Min", "Baris dua di bawah berbunyi '-in'.", "", 4),
-            ServerContent(943, "Iqro 4 • Hal 3 (Dhammatain -un)", "بٌ   تٌ   أَحَدٌ   صَمَدٌ", "Bun — Tun — A-Ha-Dun — Sho-Ma-Dun", "Dhammah rangkap di atas berbunyi '-un'.", "", 4),
-            ServerContent(944, "Iqro 4 • Hal 4 (Huruf Sukun / Mati)", "أَمْ   أَنْ   يَعْلَمُونَ   مَسْجِدٌ", "Am — An — Ya'lamuuna — Masjidun", "Huruf bertanda Sukun dimatikan tanpa memantul (kecuali Qalqalah).", "", 4),
-            ServerContent(945, "Iqro 4 • Hal 5 (Pantulan Qalqalah)", "أَبْ   أَجْ   أَدْ   أَقْ   أَطْ", "Ab' — Aj' — Ad' — Aq' — Ath'", "5 Huruf Qalqalah (ق ط ب ج د) wajib dipantulkan saat sukun.", "", 4),
-            ServerContent(946, "Iqro 4 • Hal 6 (Ujian Evaluasi Jilid 4)", "أَنْعَمْتَ   الْمَغْضُوبِ   يَكْسِبُونَ", "An-'Am-Ta — Al-Magh-Dhuu-Bi", "Pastikan Sukun dan Qalqalah terdengar beda dengan jelas!", "", 4),
-            ServerContent(951, "Iqro 5 • Hal 1 (Alif Lam Qamariyah)", "الْقَمَرُ   الْحَمْدُ   الْعَالَمِينَ", "Al-Qamaru — Al-Hamdu — Al-'Aalamiina", "Huruf Lam sukun dibaca jelas.", "", 5),
-            ServerContent(952, "Iqro 5 • Hal 2 (Alif Lam Syamsiyah)", "الشَّمْسُ   الرَّحْمَنُ   النَّاسِ", "Asy-Syamsu — Ar-Rahmaanu — An-Naasi", "Huruf Lam lebur langsung ke huruf bertasydid di depannya.", "", 5),
-            ServerContent(953, "Iqro 5 • Hal 3 (Huruf Bertasydid)", "رَبِّ   قُدِّرَ   سُبِّحَ   إِيَّاكَ", "Rab-bi — Qud-dira — Sub-biha — Iy-yaaka", "Tahan dan tekan kuat huruf yang memiliki tanda Tasydid (ّ).", "", 5),
-            ServerContent(954, "Iqro 5 • Hal 4 (Ghunnah Nun & Mim Tasydid)", "إِنَّ   عَمَّ   جَنَّةٌ   ثُمَّ", "In-na — 'Am-ma — Jan-natun — Tsum-ma", "Wajib ditahan dengungnya selama 2 harakat penuh!", "", 5),
-            ServerContent(955, "Iqro 5 • Hal 5 (Lafadz Allah / Jalalah)", "بِسْمِ اللَّهِ   مِنَ اللَّهِ   رَسُولُ اللَّهِ", "Bismillaahi (Tipis) vs Minallaahi (Tebal)", "Dibaca tipis (Lillaah) setelah Kasrah, dan tebal (Allaah) setelah Fathah/Dhammah.", "", 5),
-            ServerContent(956, "Iqro 5 • Hal 6 (Cara Waqaf / Berhenti)", "تَعْلَمُونَ ۝   أَحَدٌ ۝   الْفَلَقِ ۝", "Ta'lamuun — Ahad' — Al-Falaq'", "Huruf terakhir dimatikan ketika berhenti di akhir ayat.", "", 5),
-            ServerContent(961, "Iqro 6 • Hal 1 (Idgham Bighunnah)", "مَنْ يَقُولُ   مِنْ مَالٍ   مِنْ نِعْمَةٍ", "May-yaquulu — Mim-maalin — Min-ni'matin", "Nun mati/Tanwin bertemu ي ن م و dileburkan disertai dengung.", "", 6),
-            ServerContent(962, "Iqro 6 • Hal 2 (Idgham Bilaghunnah)", "مِنْ رَبِّهِمْ   غَفُورٌ رَحِيمٌ   مِنْ لَدُنْهُ", "Mir-rabbihim — Ghafuurur-rahiim", "Nun mati/Tanwin bertemu Lam (ل) atau Ro (ر) melebur jelas tanpa dengung.", "", 6),
-            ServerContent(963, "Iqro 6 • Hal 3 (Hukum Iqlab)", "مِنْ بَعْدِ   سَمِيعٌ بَصِيرٌ   لَيُنْبَذَنَّ", "Mim-ba'di — Samii'um-bashiir", "Nun mati/Tanwin bertemu Ba (ب) berubah menjadi bunyi Mim dengung.", "", 6),
-            ServerContent(964, "Iqro 6 • Hal 4 (Hukum Ikhfa Haqiqi)", "مِنْ شَرِّ   أَنْفُسِهِمْ   مَنْصُورًا", "Min-syarri — An-fusihim — Man-shuuran", "Nun mati/Tanwin bertemu 15 huruf Ikhfa dibaca samar disertai dengung.", "", 6),
-            ServerContent(965, "Iqro 6 • Hal 5 (Huruf Muqaththa'ah Awal Surah)", "الم   يس   طه   حم", "Alif-Laam-Miim — Yaa-Siin — Thoo-Haa", "Dibaca nama asli hurufnya dengan panjang Mad Lazim (6 harakat).", "", 6),
-            ServerContent(966, "Iqro 6 • Hal 6 (Kelulusan Iqro 6)", "قُلْ هُوَ اللَّهُ أَحَدٌ ۝ اللَّهُ الصَّمَدُ ۝", "Qul huwallaahu ahad' — Allaahush-shomad'", "Alhamdulillah! Anda telah menamatkan seluruh kurikulum Iqro 1–6.", "", 6)
-        )
-        "video" -> listOf(
-            ServerContent(401, "Belajar Huruf Hijaiyah & Makhraj Ceria Bersama Anak", "", "Animasi Edukasi Anak Sholeh", "Video belajar melafalkan 28 huruf Hijaiyah dengan lagu dan animasi yang mudah diingat anak-anak. Tekan tombol 'Layar Mati (Audio)' jika ingin mendengarkan suaranya saat layar HP terkunci.", "https://www.youtube.com/watch?v=1t4sM2xefCc"),
-            ServerContent(402, "Kisah Teladan Nabi Ibrahim AS & Burung Pipit", "", "Kisah 25 Nabi & Rasul", "Kisah inspiratif keberanian Nabi Ibrahim AS ketika menghadapi Raja Namrud dan kesetiaan burung pipit kecil yang membantu memadamkan api.", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")
-        )
-        "belajar" -> listOf(
-            ServerContent(101, "5 Rukun Islam & Penjelasannya", "بُنِيَ الإِسْلاَمُ عَلَى خَمْسٍ", "Buniyal islaamu 'alaa khamsin", "1. Mengucapkan Dua Kalimat Syahadat\n2. Mendirikan Sholat 5 Waktu\n3. Menunaikan Zakat\n4. Berpuasa di Bulan Ramadhan\n5. Menunaikan Ibadah Haji bagi yang mampu.", ""),
-            ServerContent(102, "6 Rukun Iman yang Wajib Diyakini", "أَنْ تُؤْمِنَ بِاللَّهِ وَمَلَائِكَتِهِ", "An tu'mina billaahi wa malaa'ikatihi...", "1. Iman kepada Allah SWT\n2. Iman kepada Malaikat Allah\n3. Iman kepada Kitab-Kitab Allah\n4. Iman kepada Rasul-Rasul Allah\n5. Iman kepada Hari Kiamat\n6. Iman kepada Qada dan Qadar.", "")
-        )
-        "faq" -> listOf(
-            ServerContent(201, "❓ Bagaimana cara menonton video langsung di aplikasi & mode layar mati?", "", "", "Buka menu Video -> Ketuk tombol 'Putar Video' untuk menonton langsung di dalam aplikasi, atau ketuk tombol 'Layar Mati (Audio)' agar kajian tetap bersuara meskipun layar HP Anda dikunci!", "")
-        )
-        "tajwid" -> listOf(
-            ServerContent(301, "1. Izhar Halqi (Jelas)", "مَنْ آمَنَ", "Man aamana", "Apabila Nun Sukun atau Tanwin bertemu salah satu huruf tenggorokan (ء هـ ع ح غ خ), maka dibaca jelas tanpa dengung.", "")
-        )
-        else -> listOf(
-            ServerContent(501, "Doa Berbuka Puasa", "ذَهَبَ الظَّمَأُ وَابْتَلَّتِ الْعُرُوقُ، وَثَبَتَ الأَجْرُ إِنْ شَاءَ اللَّهُ", "Dzahabadz zhama'u wabtallatil 'uruqu wa tsabatal ajru insya Allah", "Telah hilang rasa haus, telah basah urat-urat, dan telah pasti pahala, insya Allah.", "")
-        )
     }
 }
