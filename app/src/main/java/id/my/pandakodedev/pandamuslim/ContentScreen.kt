@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.view.ViewGroup
@@ -45,6 +46,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 data class ServerContent(
@@ -76,15 +81,18 @@ fun DynamicContentScreen(
 
     var iqroTabMode by remember { mutableStateOf(0) }
     var selectedJilid by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_jilid", 1)) }
-    var bookmarkedIqroId by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_id", 901)) }
+    var bookmarkedIqroId by remember { mutableStateOf(mengajiPrefs.getInt("last_iqro_id", 1)) }
     var bookmarkedIqroLabel by remember {
-        mutableStateOf(mengajiPrefs.getString("last_iqro_label", "Iqro 1 • Hal 1 (Alif - Ba)") ?: "Iqro 1 • Hal 1")
+        mutableStateOf(mengajiPrefs.getString("last_iqro_label", "Iqro 1 • Hal 1") ?: "Iqro 1 • Hal 1")
     }
     var selectedHarakatMode by remember { mutableStateOf(0) }
 
     var zoomedContent by remember { mutableStateOf<ServerContent?>(null) }
     var activeSpeakingTitle by remember { mutableStateOf<String?>(null) }
-    var currentlyReadingExplanationId by remember { mutableStateOf<Int?>(null) }
+
+    // State Pembaca Penjelasan Berirama (Expressive Neural Reader)
+    var currentlyReadingExplanationItem by remember { mutableStateOf<ServerContent?>(null) }
+    var activeExplanationSentenceIdx by remember { mutableStateOf(-1) }
 
     val expandedDescriptionIds = remember { mutableStateMapOf<Int, Boolean>() }
     var activeInAppVideoItem by remember { mutableStateOf<ServerContent?>(null) }
@@ -100,17 +108,23 @@ fun DynamicContentScreen(
     }
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
 
+    // Inisialisasi Mesin Suara dengan Pencarian Neural/WaveNet Voice Terbaik agar Tidak Kaku!
     DisposableEffect(context) {
         var ttsInstance: TextToSpeech? = null
         ttsInstance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val saudiLocale = Locale("ar", "SA")
-                val res = ttsInstance?.setLanguage(saudiLocale)
-                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    ttsInstance?.setLanguage(Locale("id", "ID"))
+                ttsInstance?.language = Locale("id", "ID")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    try {
+                        val bestIndoVoice = ttsInstance?.voices?.filter {
+                            it.locale.language == "id" || it.locale.language == "in"
+                        }?.maxByOrNull { v ->
+                            val n = v.name.lowercase()
+                            (if (n.contains("network") || n.contains("wavenet") || n.contains("neural")) 50 else 0) + v.quality
+                        }
+                        if (bestIndoVoice != null) ttsInstance?.voice = bestIndoVoice
+                    } catch (_: Exception) {}
                 }
-                ttsInstance?.setPitch(1.0f)
-                ttsInstance?.setSpeechRate(0.75f)
             }
         }
         ttsEngine = ttsInstance
@@ -125,79 +139,97 @@ fun DynamicContentScreen(
         }
     }
 
-    fun playAuthenticIslamicAudio(arabicText: String, latinText: String, rawMediaUrl: String = "") {
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        currentlyReadingExplanationId = null
-        activeSpeakingTitle = "🔊 Melafalkan Ayat/Doa: $arabicText"
+    // Loop Intonasi Per Kalimat Saat Membacakan Penjelasan Bahasa Indonesia
+    LaunchedEffect(currentlyReadingExplanationItem) {
+        val item = currentlyReadingExplanationItem ?: return@LaunchedEffect
+        val cleanTitle = item.title.replace(Regex("\\[.*?\\]"), "").trim()
+        val cleanDesc = item.description
+            .replace("📌", "")
+            .replace("🔊", "")
+            .replace("📖", "")
+            .replace("🌟", "")
+            .replace("⚠️", "Perhatian penting: ")
+            .replace("🛡️", "")
+            .replace("•", ". ")
+            .replace("➔", " menjadi ")
 
-        val parts = rawMediaUrl.split("|")
-        val directMp3Url = parts.find { it.matches(Regex(".*\\.(mp3|wav|ogg|m4a)$", RegexOption.IGNORE_CASE)) } ?: ""
+        val rawParagraph = "$cleanTitle. $cleanDesc"
+        val sentences = rawParagraph
+            .replace("\n", ". ")
+            .split(Regex("(?<=[.!?])\\s+"))
+            .map { it.trim() }
+            .filter { it.length > 2 }
 
-        if (directMp3Url.isNotBlank()) {
-            try {
-                ttsEngine?.stop()
-                bgMediaPlayer.reset()
-                bgMediaPlayer.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .build()
-                )
-                bgMediaPlayer.setDataSource(directMp3Url)
-                bgMediaPlayer.prepareAsync()
-                bgMediaPlayer.setOnPreparedListener { mp -> mp.start() }
-                return
-            } catch (_: Exception) {}
+        for (i in sentences.indices) {
+            if (currentlyReadingExplanationItem?.id != item.id) break
+            activeExplanationSentenceIdx = i
+            val sent = sentences[i]
+            activeSpeakingTitle = "🎙️ $sent"
+
+            ttsEngine?.let { tts ->
+                tts.language = Locale("id", "ID")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    try {
+                        val bestIndo = tts.voices?.filter {
+                            it.locale.language == "id" || it.locale.language == "in"
+                        }?.maxByOrNull { v ->
+                            val n = v.name.lowercase()
+                            (if (n.contains("network") || n.contains("wavenet") || n.contains("neural")) 50 else 0) + v.quality
+                        }
+                        if (bestIndo != null) tts.voice = bestIndo
+                    } catch (_: Exception) {}
+                }
+
+                val pitch = when {
+                    i == 0 -> 1.07f
+                    sent.endsWith("!") -> 1.11f
+                    sent.endsWith("?") -> 1.13f
+                    i % 2 == 0 -> 1.03f
+                    else -> 0.98f
+                }
+                tts.setPitch(pitch)
+                tts.setSpeechRate(0.92f)
+                tts.speak(sent, TextToSpeech.QUEUE_FLUSH, null, "exp_sent_$i")
+            }
+
+            val wordCount = sent.split(" ").size
+            val waitMs = (wordCount * 410L).coerceAtLeast(1600L)
+            delay(waitMs + 380L)
         }
 
-        ttsEngine?.let { tts ->
-            val saudiLocale = Locale("ar", "SA")
-            val genArabLocale = Locale("ar")
-            if (tts.isLanguageAvailable(saudiLocale) >= TextToSpeech.LANG_AVAILABLE) {
-                tts.language = saudiLocale
-            } else {
-                tts.language = genArabLocale
-            }
-            tts.setPitch(1.0f)
-            tts.setSpeechRate(0.70f)
-
-            val normalizedArabic = normalizeArabicForAuthenticRecitation(arabicText)
-            tts.speak(normalizedArabic, TextToSpeech.QUEUE_FLUSH, null, "makhraj_arab")
+        if (currentlyReadingExplanationItem?.id == item.id) {
+            currentlyReadingExplanationItem = null
+            activeExplanationSentenceIdx = -1
+            activeSpeakingTitle = null
         }
     }
 
+    fun playAuthenticIslamicAudio(arabicText: String, latinText: String, rawMediaUrl: String = "") {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        currentlyReadingExplanationItem = null
+
+        ArabicWaqafPhoneticEngine.speakAuthenticArabic(
+            arabicText = arabicText,
+            rawMediaUrl = rawMediaUrl,
+            tts = ttsEngine,
+            mediaPlayer = bgMediaPlayer,
+            onStartStatus = { statusMsg ->
+                activeSpeakingTitle = "$statusMsg  ($latinText)"
+            }
+        )
+    }
     fun toggleReadIndonesianExplanation(item: ServerContent) {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         try {
             if (bgMediaPlayer.isPlaying) bgMediaPlayer.stop()
         } catch (_: Exception) {}
 
-        if (currentlyReadingExplanationId == item.id) {
+        if (currentlyReadingExplanationItem?.id == item.id) {
             ttsEngine?.stop()
-            currentlyReadingExplanationId = null
+            currentlyReadingExplanationItem = null
             activeSpeakingTitle = null
         } else {
-            currentlyReadingExplanationId = item.id
-            val cleanTitle = item.title.replace(Regex("\\[.*?\\]"), "").trim()
-            val cleanDesc = item.description
-                .replace("📌", "")
-                .replace("🔊", "")
-                .replace("📖", "")
-                .replace("🌟", "")
-                .replace("⚠️", "Perhatian: ")
-                .replace("🛡️", "")
-                .replace("•", ", ")
-                .replace("➔", " menjadi ")
-
-            activeSpeakingTitle = "🎙️ Membacakan Penjelasan: $cleanTitle"
-
-            ttsEngine?.let { tts ->
-                tts.language = Locale("id", "ID")
-                tts.setPitch(1.03f)
-                tts.setSpeechRate(0.92f)
-                val fullSpeech = "$cleanTitle. ${if (item.latinText.isNotBlank()) "Bacaan: ${item.latinText}." else ""} Penjelasan: $cleanDesc"
-                tts.speak(fullSpeech, TextToSpeech.QUEUE_FLUSH, null, "indo_explanation_${item.id}")
-            }
+            currentlyReadingExplanationItem = item
         }
     }
 
@@ -211,6 +243,7 @@ fun DynamicContentScreen(
         if (directStreamUrl.isNotBlank()) {
             try {
                 ttsEngine?.stop()
+                currentlyReadingExplanationItem = null
                 isPreparingBackgroundMedia = true
                 backgroundMediaTitle = item.title
                 bgMediaPlayer.reset()
@@ -221,7 +254,7 @@ fun DynamicContentScreen(
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .build()
                 )
-                bgMediaPlayer.setDataSource(directStreamUrl)
+                bgMediaPlayer.setDataSource(normalizeServerMediaUrl(directStreamUrl))
                 bgMediaPlayer.prepareAsync()
                 bgMediaPlayer.setOnPreparedListener { mp ->
                     isPreparingBackgroundMedia = false
@@ -251,7 +284,7 @@ fun DynamicContentScreen(
             bgMediaPlayer.reset()
         } catch (_: Exception) {}
         ttsEngine?.stop()
-        currentlyReadingExplanationId = null
+        currentlyReadingExplanationItem = null
         isPlayingBackgroundMedia = false
         isPreparingBackgroundMedia = false
     }
@@ -268,11 +301,17 @@ fun DynamicContentScreen(
         Toast.makeText(context, "🔖 Batas mengaji Iqro disimpan: ${item.title}", Toast.LENGTH_SHORT).show()
     }
 
+    fun reloadFromWebServer() {
+        isLoading = true
+        CoroutineScope(Dispatchers.Main).launch {
+            items = fetchContentsFromServer(categoryKey)
+            isLoading = false
+        }
+    }
+
     LaunchedEffect(categoryKey) {
         isLoading = true
-        val serverItems = fetchContentsFromServer(categoryKey)
-        val builtInItems = getBuiltInFallbackContents(categoryKey)
-        items = if (serverItems.isNotEmpty()) serverItems + builtInItems else builtInItems
+        items = fetchContentsFromServer(categoryKey)
         isLoading = false
     }
 
@@ -284,9 +323,9 @@ fun DynamicContentScreen(
                         Text(menuTitle, fontWeight = FontWeight.ExtraBold, color = Color.White, fontSize = 18.sp)
                         when (categoryKey) {
                             "iqro" -> Text("📌 Terakhir: $bookmarkedIqroLabel", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            "doa" -> Text("🤲 Koleksi Doa Harian & Hadits Pilihan Bersuara", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            "belajar" -> Text("🛡️ Adab Pergaulan, Anti-Zina, Panduan & Bacaan Sholat", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            "tajwid" -> Text("📖 18 Hukum Tajwid Lengkap & Suara Penjelasan", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "doa" -> Text("🤲 Koleksi Doa & Hadits dari Server Admin", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "belajar" -> Text("🛡️ Adab Pergaulan, Panduan & Bacaan Sholat", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            "tajwid" -> Text("📖 Materi Ilmu Tajwid & Suara Penjelasan", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             "video" -> Text("🎬 Putar di Aplikasi & Mode Layar Terkunci 🔒", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -299,11 +338,16 @@ fun DynamicContentScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Kembali", tint = Color.White)
                     }
                 },
+                actions = {
+                    IconButton(onClick = { reloadFromWebServer() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Muat Ulang dari Web", tint = GoldAccent)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = EmeraldDark)
             )
         },
         bottomBar = {
-            if (isPlayingBackgroundMedia || isPreparingBackgroundMedia || currentlyReadingExplanationId != null) {
+            if (isPlayingBackgroundMedia || isPreparingBackgroundMedia || currentlyReadingExplanationItem != null) {
                 Surface(
                     color = EmeraldDark,
                     shadowElevation = 14.dp,
@@ -320,7 +364,7 @@ fun DynamicContentScreen(
                             Surface(color = GoldAccent, shape = CircleShape, modifier = Modifier.size(38.dp)) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        imageVector = if (currentlyReadingExplanationId != null) Icons.Default.RecordVoiceOver else Icons.Default.Lock,
+                                        imageVector = if (currentlyReadingExplanationItem != null) Icons.Default.RecordVoiceOver else Icons.Default.Lock,
                                         contentDescription = null,
                                         tint = Color(0xFF0F172A),
                                         modifier = Modifier.size(20.dp)
@@ -330,7 +374,7 @@ fun DynamicContentScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = if (currentlyReadingExplanationId != null) "🔊 Sedang Membacakan Penjelasan Materi"
+                                    text = if (currentlyReadingExplanationItem != null) "🔊 Membacakan Penjelasan (Suara Berirama)"
                                     else "🔒 Tetap Hidup Saat Layar Terkunci",
                                     color = GoldAccent,
                                     fontSize = 11.sp,
@@ -379,7 +423,7 @@ fun DynamicContentScreen(
                 }
             }
 
-            if (categoryKey == "doa") {
+            if (categoryKey == "doa" && items.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -411,10 +455,10 @@ fun DynamicContentScreen(
                 }
             }
 
-            if (categoryKey == "belajar") {
+            if (categoryKey == "belajar" && items.isNotEmpty()) {
                 val belajarCategories = listOf(
                     "SEMUA" to "🌟 Semua Materi",
-                    "ADAB" to "🛡️ Adab & Benteng Pergaulan (PENTING!)",
+                    "ADAB" to "🛡️ Adab & Benteng Pergaulan",
                     "SHOLAT" to "🕌 Panduan Sholat",
                     "BACAAN_SHOLAT" to "🤲 Bacaan Sholat",
                     "WUDHU" to "💧 Wudhu & Bersuci",
@@ -473,28 +517,28 @@ fun DynamicContentScreen(
                 if (isLoading) {
                     CircularProgressIndicator(color = EmeraldPrimary, modifier = Modifier.align(Alignment.Center))
                 } else if (categoryKey == "iqro" && iqroTabMode == 0) {
-                    val jilidItems = remember(items, selectedJilid) {
-                        items.filter { it.jilidLevel == selectedJilid || (selectedJilid == 1 && it.id < 900) }
-                    }
-
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        contentPadding = PaddingValues(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(jilidItems, key = { it.id }) { item ->
-                            IqroVisualSoundCard(
-                                item = item,
-                                isBookmarked = item.id == bookmarkedIqroId,
-                                onPlaySound = { playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl) },
-                                onBookmarkClick = { saveIqroBookmark(item) },
-                                onZoomClick = {
-                                    playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl)
-                                    zoomedContent = item
-                                }
-                            )
+                    if (items.isEmpty()) {
+                        EmptyWebDatabaseView(categoryKey = categoryKey, onRefresh = { reloadFromWebServer() })
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            contentPadding = PaddingValues(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(items, key = { it.id }) { item ->
+                                IqroVisualSoundCard(
+                                    item = item,
+                                    isBookmarked = item.id == bookmarkedIqroId,
+                                    onPlaySound = { playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl) },
+                                    onBookmarkClick = { saveIqroBookmark(item) },
+                                    onZoomClick = {
+                                        playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl)
+                                        zoomedContent = item
+                                    }
+                                )
+                            }
                         }
                     }
                 } else if (categoryKey == "iqro" && iqroTabMode == 1) {
@@ -544,342 +588,354 @@ fun DynamicContentScreen(
                                 else -> items
                             }
                             "belajar" -> when (belajarSubTab) {
-                                "ADAB" -> items.filter { it.title.contains("[Adab]", ignoreCase = true) }
-                                "SHOLAT" -> items.filter { it.title.contains("[Sholat]", ignoreCase = true) }
-                                "BACAAN_SHOLAT" -> items.filter { it.title.contains("[Bacaan Sholat]", ignoreCase = true) }
-                                "WUDHU" -> items.filter { it.title.contains("[Wudhu]", ignoreCase = true) }
-                                "AQIDAH" -> items.filter { it.title.contains("[Aqidah]", ignoreCase = true) }
+                                "ADAB" -> items.filter { it.title.contains("Adab", ignoreCase = true) }
+                                "SHOLAT" -> items.filter { it.title.contains("Sholat", ignoreCase = true) && !it.title.contains("Bacaan", ignoreCase = true) }
+                                "BACAAN_SHOLAT" -> items.filter { it.title.contains("Bacaan", ignoreCase = true) }
+                                "WUDHU" -> items.filter { it.title.contains("Wudhu", ignoreCase = true) }
+                                "AQIDAH" -> items.filter { it.title.contains("Aqidah", ignoreCase = true) || it.title.contains("Rukun", ignoreCase = true) }
                                 else -> items
                             }
                             else -> items
                         }
                     }
 
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        if (categoryKey == "belajar") {
-                            item {
-                                Card(
-                                    shape = RoundedCornerShape(22.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF881337)),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .border(2.dp, GoldAccent, RoundedCornerShape(22.dp))
-                                        .clickable {
-                                            belajarSubTab = if (belajarSubTab == "ADAB") "SEMUA" else "ADAB"
-                                        }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(16.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                    if (displayedList.isEmpty()) {
+                        EmptyWebDatabaseView(categoryKey = categoryKey, onRefresh = { reloadFromWebServer() })
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            if (categoryKey == "belajar") {
+                                item {
+                                    Card(
+                                        shape = RoundedCornerShape(22.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF881337)),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .border(2.dp, GoldAccent, RoundedCornerShape(22.dp))
+                                            .clickable {
+                                                belajarSubTab = if (belajarSubTab == "ADAB") "SEMUA" else "ADAB"
+                                            }
                                     ) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier
-                                                .size(50.dp)
-                                                .clip(CircleShape)
-                                                .background(GoldAccent)
+                                        Row(
+                                            modifier = Modifier.padding(16.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("🛡️", fontSize = 26.sp)
-                                        }
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Surface(color = GoldAccent, shape = RoundedCornerShape(50)) {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier
+                                                    .size(50.dp)
+                                                    .clip(CircleShape)
+                                                    .background(GoldAccent)
+                                            ) {
+                                                Text("🛡️", fontSize = 26.sp)
+                                            }
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Surface(color = GoldAccent, shape = RoundedCornerShape(50)) {
+                                                    Text(
+                                                        text = "⚠️ PERISAI AKHLAK & BENTENG REMAJA MUSLIM",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Black,
+                                                        color = Color(0xFF0F172A),
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
-                                                    text = "⚠️ PERISAI AKHLAK & BENTENG REMAJA MUSLIM",
-                                                    fontSize = 9.sp,
+                                                    text = "Utamakan Adab Sebelum Ilmu & Jauhi Pergaulan Bebas (Zina)",
                                                     fontWeight = FontWeight.Black,
-                                                    color = Color(0xFF0F172A),
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    fontSize = 14.sp,
+                                                    color = Color.White
+                                                )
+                                                Text(
+                                                    text = if (belajarSubTab == "ADAB") "Menampilkan khusus materi Adab (Ketuk untuk lihat semua)"
+                                                    else "👉 Ketuk di sini untuk fokus membuka Materi Adab & Benteng Diri!",
+                                                    fontSize = 11.sp,
+                                                    color = GoldAccent,
+                                                    fontWeight = FontWeight.Bold
                                                 )
                                             }
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = "Utamakan Adab Sebelum Ilmu & Jauhi Pergaulan Bebas (Zina)",
-                                                fontWeight = FontWeight.Black,
-                                                fontSize = 14.sp,
-                                                color = Color.White
-                                            )
-                                            Text(
-                                                text = if (belajarSubTab == "ADAB") "Menampilkan khusus materi Adab & Benteng Pergaulan (Ketuk untuk lihat semua)"
-                                                else "👉 Ketuk di sini untuk fokus membuka 10 Materi Adab & Benteng Diri!",
-                                                fontSize = 11.sp,
-                                                color = GoldAccent,
-                                                fontWeight = FontWeight.Bold
-                                            )
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        items(displayedList, key = { it.id }) { item ->
-                            val isVideoCategory = categoryKey == "video" ||
-                                    extractYoutubeVideoId(item.mediaUrl) != null ||
-                                    item.mediaUrl.contains(".mp4", ignoreCase = true)
+                            items(displayedList, key = { it.id }) { item ->
+                                val isVideoCategory = categoryKey == "video" ||
+                                        extractYoutubeVideoId(item.mediaUrl) != null ||
+                                        item.mediaUrl.contains(".mp4", ignoreCase = true)
 
-                            val isAdabHighlighted = item.title.contains("[Adab]", ignoreCase = true)
-                            val isDescOpen = expandedDescriptionIds[item.id] ?: false
-                            val isReadingThisDesc = (currentlyReadingExplanationId == item.id)
-                            val previewBannerUrl = extractMediaPreviewUrl(item.mediaUrl)
-                            val hasQariMp3 = item.mediaUrl.contains(".mp3", ignoreCase = true)
+                                val isAdabHighlighted = item.title.contains("Adab", ignoreCase = true)
+                                val isDescOpen = expandedDescriptionIds[item.id] ?: false
+                                val isReadingThisDesc = (currentlyReadingExplanationItem?.id == item.id)
+                                val previewBannerUrl = extractMediaPreviewUrl(item.mediaUrl)
+                                val hasQariMp3 = item.mediaUrl.contains(".mp3", ignoreCase = true)
 
-                            Card(
-                                shape = RoundedCornerShape(24.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isAdabHighlighted) Color(0xFFFFFBEB) else Color.White
-                                ),
-                                elevation = CardDefaults.cardElevation(defaultElevation = if (isAdabHighlighted) 5.dp else 3.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .border(
-                                        width = if (isAdabHighlighted) 2.dp else 1.dp,
-                                        color = if (isAdabHighlighted) Color(0xFFD97706) else MintSurface,
-                                        shape = RoundedCornerShape(24.dp)
-                                    )
-                            ) {
-                                Column {
-                                    if (previewBannerUrl.isNotBlank() || isVideoCategory) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .aspectRatio(16f / 9f)
-                                                .background(Brush.linearGradient(listOf(EmeraldDark, EmeraldPrimary)))
-                                                .clickable {
-                                                    if (isVideoCategory) {
-                                                        stopBackgroundMedia()
-                                                        activeInAppVideoItem = item
+                                Card(
+                                    shape = RoundedCornerShape(24.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isAdabHighlighted) Color(0xFFFFFBEB) else Color.White
+                                    ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = if (isAdabHighlighted) 5.dp else 3.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(
+                                            width = if (isAdabHighlighted) 2.dp else 1.dp,
+                                            color = if (isAdabHighlighted) Color(0xFFD97706) else MintSurface,
+                                            shape = RoundedCornerShape(24.dp)
+                                        )
+                                ) {
+                                    Column {
+                                        if (previewBannerUrl.isNotBlank() || isVideoCategory) {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .aspectRatio(16f / 9f)
+                                                    .background(Brush.linearGradient(listOf(EmeraldDark, EmeraldPrimary)))
+                                                    .clickable {
+                                                        if (isVideoCategory) {
+                                                            stopBackgroundMedia()
+                                                            activeInAppVideoItem = item
+                                                        }
                                                     }
-                                                }
-                                        ) {
-                                            if (previewBannerUrl.isNotBlank()) {
-                                                NetworkImageLoader(
-                                                    imageUrl = previewBannerUrl,
-                                                    modifier = Modifier.fillMaxSize()
-                                                )
-                                            } else {
-                                                MosqueSilhouetteOrnamentCanvas(
-                                                    accentColor = GoldAccent,
-                                                    modifier = Modifier.matchParentSize()
-                                                )
-                                            }
-
-                                            if (isVideoCategory) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxSize()
-                                                        .background(Color.Black.copy(alpha = 0.30f))
-                                                )
-                                                Surface(
-                                                    color = Color(0xFFE11D48),
-                                                    shape = CircleShape,
-                                                    shadowElevation = 8.dp,
-                                                    modifier = Modifier
-                                                        .size(64.dp)
-                                                        .border(2.5.dp, Color.White, CircleShape)
-                                                ) {
-                                                    Box(contentAlignment = Alignment.Center) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.PlayArrow,
-                                                            contentDescription = "Putar di Aplikasi",
-                                                            tint = Color.White,
-                                                            modifier = Modifier.size(36.dp)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    Column(modifier = Modifier.padding(16.dp)) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                if (isAdabHighlighted) {
-                                                    Surface(color = Color(0xFFE11D48), shape = RoundedCornerShape(50)) {
-                                                        Text(
-                                                            text = "🛡️ UTAMAKAN ADAB & BENTENG AKHLAK",
-                                                            fontSize = 9.sp,
-                                                            fontWeight = FontWeight.Black,
-                                                            color = Color.White,
-                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                                        )
-                                                    }
-                                                    Spacer(modifier = Modifier.height(5.dp))
-                                                } else if (hasQariMp3) {
-                                                    Surface(color = Color(0xFFD1FAE5), shape = RoundedCornerShape(50)) {
-                                                        Text(
-                                                            text = "🎙️ Suara Qari Syaikh Al-Afasy",
-                                                            fontSize = 10.sp,
-                                                            fontWeight = FontWeight.Black,
-                                                            color = EmeraldDark,
-                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                                        )
-                                                    }
-                                                    Spacer(modifier = Modifier.height(4.dp))
-                                                }
-
-                                                Text(
-                                                    text = item.title,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    fontSize = 16.sp,
-                                                    color = if (isAdabHighlighted) Color(0xFF881337) else EmeraldDark
-                                                )
-                                            }
-
-                                            if (item.arabicText.isNotBlank()) {
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Surface(
-                                                    color = GoldAccent,
-                                                    shape = RoundedCornerShape(50),
-                                                    modifier = Modifier.clickable {
-                                                        playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl)
-                                                    }
-                                                ) {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                                    ) {
-                                                        Icon(Icons.Default.VolumeUp, contentDescription = "Suara Arab", tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("Lafadz", fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF0F172A))
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        if (item.arabicText.isNotBlank()) {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Text(
-                                                text = item.arabicText,
-                                                fontSize = 27.sp,
-                                                lineHeight = 46.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = EmeraldDark,
-                                                textAlign = TextAlign.End,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                        if (!isVideoCategory && item.latinText.isNotBlank()) {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Text(item.latinText, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = EmeraldPrimary)
-                                        }
-
-                                        Spacer(modifier = Modifier.height(12.dp))
-
-                                        if (isVideoCategory) {
-                                            Row(
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                modifier = Modifier.fillMaxWidth()
                                             ) {
-                                                Button(
-                                                    onClick = {
-                                                        stopBackgroundMedia()
-                                                        activeInAppVideoItem = item
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Icon(Icons.Default.PlayCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                    Spacer(modifier = Modifier.width(5.dp))
-                                                    Text("Putar Video", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                                                if (previewBannerUrl.isNotBlank()) {
+                                                    NetworkImageLoader(
+                                                        imageUrl = previewBannerUrl,
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                } else {
+                                                    MosqueSilhouetteOrnamentCanvas(
+                                                        accentColor = GoldAccent,
+                                                        modifier = Modifier.matchParentSize()
+                                                    )
                                                 }
 
-                                                Button(
-                                                    onClick = {
-                                                        activeInAppVideoItem = null
-                                                        playBackgroundLockScreenMedia(item)
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(15.dp))
-                                                    Spacer(modifier = Modifier.width(5.dp))
-                                                    Text("Layar Mati (Audio)", color = Color(0xFF0F172A), fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                                                if (isVideoCategory) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .background(Color.Black.copy(alpha = 0.28f))
+                                                    )
+                                                    Surface(
+                                                        color = Color(0xFFE11D48),
+                                                        shape = CircleShape,
+                                                        shadowElevation = 8.dp,
+                                                        modifier = Modifier
+                                                            .size(64.dp)
+                                                            .border(2.5.dp, Color.White, CircleShape)
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.PlayArrow,
+                                                                contentDescription = "Putar di Aplikasi",
+                                                                tint = Color.White,
+                                                                modifier = Modifier.size(36.dp)
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
-                                            Spacer(modifier = Modifier.height(8.dp))
                                         }
 
-                                        Surface(
-                                            color = if (isDescOpen) EmeraldDark else if (isAdabHighlighted) Color(0xFFFEF08A) else MintSurface,
-                                            shape = RoundedCornerShape(12.dp),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable { expandedDescriptionIds[item.id] = !isDescOpen }
-                                        ) {
+                                        Column(modifier = Modifier.padding(16.dp)) {
                                             Row(
-                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                                modifier = Modifier.fillMaxWidth(),
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text(
-                                                    text = if (isDescOpen) "📖 Tutup Arti & Penjelasan" else "📖 Buka Arti & Penjelasan (+ Suara Penjelasan 🔊)",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    color = if (isDescOpen) GoldAccent else EmeraldDark
-                                                )
-                                                Icon(
-                                                    imageVector = if (isDescOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                                    contentDescription = null,
-                                                    tint = if (isDescOpen) GoldAccent else EmeraldDark
-                                                )
-                                            }
-                                        }
-
-                                        AnimatedVisibility(visible = isDescOpen) {
-                                            Column(modifier = Modifier.padding(top = 10.dp)) {
-                                                Surface(
-                                                    color = OffWhiteBg,
-                                                    shape = RoundedCornerShape(16.dp),
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .border(1.5.dp, if (isAdabHighlighted) GoldAccent else MintSurface, RoundedCornerShape(16.dp))
-                                                ) {
-                                                    Column(modifier = Modifier.padding(14.dp)) {
-                                                        Button(
-                                                            onClick = { toggleReadIndonesianExplanation(item) },
-                                                            colors = ButtonDefaults.buttonColors(
-                                                                containerColor = if (isReadingThisDesc) Color(0xFFE11D48) else GoldAccent
-                                                            ),
-                                                            shape = RoundedCornerShape(50),
-                                                            modifier = Modifier.fillMaxWidth()
-                                                        ) {
-                                                            Icon(
-                                                                imageVector = if (isReadingThisDesc) Icons.Default.Stop else Icons.Default.RecordVoiceOver,
-                                                                contentDescription = null,
-                                                                tint = if (isReadingThisDesc) Color.White else Color(0xFF0F172A),
-                                                                modifier = Modifier.size(18.dp)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    if (isAdabHighlighted) {
+                                                        Surface(color = Color(0xFFE11D48), shape = RoundedCornerShape(50)) {
                                                             Text(
-                                                                text = if (isReadingThisDesc) "⏹️ Hentikan Suara Penjelasan"
-                                                                else "🔊 Putar Suara Penjelasan & Nasihat Ini",
-                                                                color = if (isReadingThisDesc) Color.White else Color(0xFF0F172A),
+                                                                text = "🛡️ UTAMAKAN ADAB & BENTENG AKHLAK",
+                                                                fontSize = 9.sp,
                                                                 fontWeight = FontWeight.Black,
-                                                                fontSize = 12.sp
+                                                                color = Color.White,
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                                             )
                                                         }
-
-                                                        Spacer(modifier = Modifier.height(12.dp))
-
+                                                        Spacer(modifier = Modifier.height(5.dp))
+                                                    } else if (hasQariMp3) {
+                                                        Surface(color = Color(0xFFD1FAE5), shape = RoundedCornerShape(50)) {
+                                                            Text(
+                                                                text = "🎙️ Audio Qari Tersedia",
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Black,
+                                                                color = EmeraldDark,
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                            )
+                                                        }
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                    } else if (isVideoCategory && item.latinText.isNotBlank()) {
                                                         Text(
-                                                            text = item.description.ifBlank { "Tidak ada penjelasan tambahan." },
-                                                            fontSize = 14.sp,
-                                                            color = Color(0xFF1E293B),
-                                                            lineHeight = 22.sp
+                                                            text = "📺 ${item.latinText}",
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = EmeraldPrimary
                                                         )
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                    }
+
+                                                    Text(
+                                                        text = item.title,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        fontSize = 16.sp,
+                                                        color = if (isAdabHighlighted) Color(0xFF881337) else EmeraldDark
+                                                    )
+                                                }
+
+                                                if (item.arabicText.isNotBlank()) {
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Surface(
+                                                        color = GoldAccent,
+                                                        shape = RoundedCornerShape(50),
+                                                        modifier = Modifier.clickable {
+                                                            playAuthenticIslamicAudio(item.arabicText, item.latinText, item.mediaUrl)
+                                                        }
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                        ) {
+                                                            Icon(Icons.Default.VolumeUp, contentDescription = "Suara Arab", tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Text("Lafadz", fontSize = 11.sp, fontWeight = FontWeight.Black, color = Color(0xFF0F172A))
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            if (item.arabicText.isNotBlank()) {
+                                                Spacer(modifier = Modifier.height(12.dp))
+                                                Text(
+                                                    text = item.arabicText,
+                                                    fontSize = 27.sp,
+                                                    lineHeight = 46.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = EmeraldDark,
+                                                    textAlign = TextAlign.End,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                            }
+                                            if (!isVideoCategory && item.latinText.isNotBlank()) {
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text(item.latinText, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = EmeraldPrimary)
+                                            }
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            if (isVideoCategory) {
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Button(
+                                                        onClick = {
+                                                            stopBackgroundMedia()
+                                                            activeInAppVideoItem = item
+                                                        },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Icon(Icons.Default.PlayCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                        Spacer(modifier = Modifier.width(5.dp))
+                                                        Text("Putar Video", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                                                    }
+
+                                                    Button(
+                                                        onClick = {
+                                                            activeInAppVideoItem = null
+                                                            playBackgroundLockScreenMedia(item)
+                                                        },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(15.dp))
+                                                        Spacer(modifier = Modifier.width(5.dp))
+                                                        Text("Layar Mati (Audio)", color = Color(0xFF0F172A), fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                                                    }
+                                                }
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                            }
+
+                                            Surface(
+                                                color = if (isDescOpen) EmeraldDark else if (isAdabHighlighted) Color(0xFFFEF08A) else MintSurface,
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { expandedDescriptionIds[item.id] = !isDescOpen }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = if (isDescOpen) "📖 Tutup Arti & Penjelasan" else "📖 Buka Arti & Penjelasan (+ Suara Penjelasan 🔊)",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        color = if (isDescOpen) GoldAccent else EmeraldDark
+                                                    )
+                                                    Icon(
+                                                        imageVector = if (isDescOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                                        contentDescription = null,
+                                                        tint = if (isDescOpen) GoldAccent else EmeraldDark
+                                                    )
+                                                }
+                                            }
+
+                                            AnimatedVisibility(visible = isDescOpen) {
+                                                Column(modifier = Modifier.padding(top = 10.dp)) {
+                                                    Surface(
+                                                        color = OffWhiteBg,
+                                                        shape = RoundedCornerShape(16.dp),
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .border(1.5.dp, if (isAdabHighlighted) GoldAccent else MintSurface, RoundedCornerShape(16.dp))
+                                                    ) {
+                                                        Column(modifier = Modifier.padding(14.dp)) {
+                                                            Button(
+                                                                onClick = { toggleReadIndonesianExplanation(item) },
+                                                                colors = ButtonDefaults.buttonColors(
+                                                                    containerColor = if (isReadingThisDesc) Color(0xFFE11D48) else GoldAccent
+                                                                ),
+                                                                shape = RoundedCornerShape(50),
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = if (isReadingThisDesc) Icons.Default.Stop else Icons.Default.RecordVoiceOver,
+                                                                    contentDescription = null,
+                                                                    tint = if (isReadingThisDesc) Color.White else Color(0xFF0F172A),
+                                                                    modifier = Modifier.size(18.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(
+                                                                    text = if (isReadingThisDesc) "⏹️ Hentikan Suara Penjelasan"
+                                                                    else "🔊 Putar Suara Penjelasan & Nasihat Ini",
+                                                                    color = if (isReadingThisDesc) Color.White else Color(0xFF0F172A),
+                                                                    fontWeight = FontWeight.Black,
+                                                                    fontSize = 12.sp
+                                                                )
+                                                            }
+
+                                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                                            Text(
+                                                                text = item.description.ifBlank { "Tidak ada penjelasan tambahan." },
+                                                                fontSize = 14.sp,
+                                                                color = Color(0xFF1E293B),
+                                                                lineHeight = 22.sp
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -904,12 +960,46 @@ fun DynamicContentScreen(
     }
 }
 
-fun normalizeArabicForAuthenticRecitation(rawArabic: String): String {
-    val trimmed = rawArabic.trim()
-    if (trimmed.length == 2 && (trimmed[1] == '\u064E' || trimmed[1] == '\u0650' || trimmed[1] == '\u064F')) {
-        return "${trimmed}هْ"
+@Composable
+fun EmptyWebDatabaseView(categoryKey: String, onRefresh: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("📭", fontSize = 48.sp)
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = "Belum Ada Konten [${categoryKey.uppercase()}] di Database Web",
+            fontWeight = FontWeight.Black,
+            fontSize = 16.sp,
+            color = EmeraldDark,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = "Silakan buka dashboard.php di Web Admin Anda lalu klik tombol '📥 Impor 100+ Materi & Kisah Nabi' atau tambahkan materi baru.",
+            fontSize = 13.sp,
+            color = Color.Gray,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+            onClick = onRefresh,
+            colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
+            shape = RoundedCornerShape(50)
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Muat Ulang dari Server Web", fontWeight = FontWeight.ExtraBold)
+        }
     }
-    return trimmed.replace(Regex("\\s{2,}"), " ، ")
+}
+
+fun normalizeArabicForAuthenticRecitation(rawArabic: String): String {
+    return ArabicWaqafPhoneticEngine.toWaqafRecitationText(rawArabic)
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -920,7 +1010,8 @@ fun InAppUniversalVideoPlayerBox(
     onClosePlayer: () -> Unit
 ) {
     val cleanUrl = remember(item.mediaUrl) {
-        item.mediaUrl.split("|").lastOrNull { it.isNotBlank() } ?: ""
+        val rawPart = item.mediaUrl.split("|").lastOrNull { it.isNotBlank() } ?: ""
+        normalizeServerMediaUrl(rawPart)
     }
     val ytId = remember(cleanUrl) { extractYoutubeVideoId(cleanUrl) }
 

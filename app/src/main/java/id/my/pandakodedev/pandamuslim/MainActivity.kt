@@ -180,11 +180,12 @@ fun PandaMuslimAppNavigator(
 
             // Navigasi 6 Menu Inovatif Baru
             "KisahNabi" -> KisahNabiScreen(onBack = { currentScreen = "HOME" })
-            "KuisIslami" -> KuisIslamiGameScreen(onBack = { currentScreen = "HOME" })
+            "KuisIslami" -> KuisIslamiScreen(onBack = { currentScreen = "HOME" })
             "KalenderHijriah" -> KalenderHijriahScreen(onBack = { currentScreen = "HOME" })
             "KamusHalal" -> KamusHalalScreen(onBack = { currentScreen = "HOME" })
             "TanyaPanda" -> TanyaKakPandaScreen(onBack = { currentScreen = "HOME" })
             "PialaSertifikat" -> PialaSertifikatScreen(onBack = { currentScreen = "HOME" })
+            "Imsakiyah" -> ImsakiyahPuasaScreen(onBack = { currentScreen = "HOME" })
 
             else -> {
                 val categoryMap = mapOf(

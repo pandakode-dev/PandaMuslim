@@ -1,6 +1,7 @@
 package id.my.pandakodedev.pandamuslim
 
 import android.content.Context
+import android.media.MediaPlayer
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
@@ -76,6 +77,7 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
         label = "tasbih_scale"
     )
 
+    val mediaPlayer = remember { MediaPlayer() }
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(context) {
         var tts: TextToSpeech? = null
@@ -90,6 +92,10 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
         }
         ttsEngine = tts
         onDispose {
+            try {
+                if (mediaPlayer.isPlaying) mediaPlayer.stop()
+                mediaPlayer.release()
+            } catch (_: Exception) {}
             tts?.stop()
             tts?.shutdown()
         }
@@ -102,8 +108,12 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
         }
     }
 
-    fun speakCurrentDzikir() {
-        ttsEngine?.speak(selectedDzikir.arabic, TextToSpeech.QUEUE_FLUSH, null, "dzikir_tts")
+    fun speakCurrentDzikir(arabicRaw: String = selectedDzikir.arabic) {
+        ArabicWaqafPhoneticEngine.speakAuthenticArabic(
+            arabicText = arabicRaw,
+            tts = ttsEngine,
+            mediaPlayer = mediaPlayer
+        )
     }
 
     fun incrementTasbih() {
@@ -137,6 +147,7 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = {
+                        try { if (mediaPlayer.isPlaying) mediaPlayer.stop() } catch (_: Exception) {}
                         ttsEngine?.stop()
                         onBack()
                     }) {

@@ -158,9 +158,11 @@ fun AsmaulHusnaScreen(onBack: () -> Unit) {
 
     fun speakSingleAsmaul(item: AsmaulHusnaItem, idx: Int) {
         activeChantIndex = idx
-        ttsEngine?.setPitch(1.08f)
-        ttsEngine?.setSpeechRate(0.75f)
-        ttsEngine?.speak(item.arabic, TextToSpeech.QUEUE_FLUSH, null, "single_asma")
+        ArabicWaqafPhoneticEngine.speakAuthenticArabic(
+            arabicText = item.arabic,
+            tts = ttsEngine,
+            mediaPlayer = mediaPlayer
+        )
     }
 
     Scaffold(

@@ -137,49 +137,24 @@ fun PandaMuslimHomeScreen(
         mengajiPrefs.getString("last_iqro_label", "Iqro 1 • Hal 1") ?: "Iqro 1 • Hal 1"
     }
 
-    val defaultBanners = remember {
-        listOf(
-            HomeBannerSlide(
-                id = 1,
-                badge = "🌟 SAHABAT IBADAH HARIAN",
-                title = "Doa Tambah Ilmu & Pahala",
-                arabicText = "رَبِّ زِدْنِي عِلْمًا وَارْزُقْنِي فَهِمًا",
-                subtitle = "Jangan lupa sholat tepat waktu & mengaji setiap hari bersama PandaMuslim!"
-            ),
-            HomeBannerSlide(
-                id = 2,
-                badge = "🌈 FITUR UNGGULAN",
-                title = "Mushaf Al-Quran Tajwid Warna",
-                arabicText = "وَرَتِّلِ الْقُرْآنَ تَرْتِيلًا",
-                subtitle = "Dilengkapi Mode Hafalan ulang 5x per ayat, Mode Quiz & 5 Khat Timur Tengah."
-            ),
-            HomeBannerSlide(
-                id = 3,
-                badge = "📗 BELAJAR MENGAJI ANAK",
-                title = "Iqro Jilid 1–6 Bersuara",
-                arabicText = "خَيْرُكُمْ مَنْ تَعَلَّمَ الْقُرْآنَ وَعَلَّمَهُ",
-                subtitle = "Ketuk huruf untuk mendengar pengucapan makhraj & latihan baca tanpa batas!"
-            )
-        )
-    }
-
-    var bannerSlides by remember { mutableStateOf(defaultBanners) }
+    // MURNI MENGAMBIL BANNER DARI WEB ADMIN SAJA (Tanpa mencampur banner bawaan Android!)
+    var bannerSlides by remember { mutableStateOf<List<HomeBannerSlide>>(emptyList()) }
+    var isLoadingBanners by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
+        isLoadingBanners = true
         val serverBanners = fetchContentsFromServer("banner")
-        if (serverBanners.isNotEmpty()) {
-            val mapped = serverBanners.map { b ->
-                HomeBannerSlide(
-                    id = b.id,
-                    badge = if (b.latinText.isNotBlank()) b.latinText else "✨ INFO PANDAMUSLIM",
-                    title = b.title,
-                    arabicText = b.arabicText,
-                    subtitle = b.description,
-                    imageUrl = extractMediaPreviewUrl(b.mediaUrl)
-                )
-            }
-            bannerSlides = mapped + defaultBanners
+        bannerSlides = serverBanners.map { b ->
+            HomeBannerSlide(
+                id = b.id,
+                badge = if (b.latinText.isNotBlank()) b.latinText else "✨ INFO PANDAMUSLIM",
+                title = b.title,
+                arabicText = b.arabicText,
+                subtitle = b.description.ifBlank { "Selamat beribadah bersama PandaMuslim!" },
+                imageUrl = extractMediaPreviewUrl(b.mediaUrl)
+            )
         }
+        isLoadingBanners = false
     }
 
     val menuRows = remember {
@@ -385,11 +360,26 @@ fun PandaMuslimHomeScreen(
 
         item(key = "banner_slider_section") {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                BannerCarouselSlider3D(
-                    slides = bannerSlides,
-                    theme = currentTheme
-                )
-                Spacer(modifier = Modifier.height(14.dp))
+                if (bannerSlides.isNotEmpty()) {
+                    BannerCarouselSlider3D(
+                        slides = bannerSlides,
+                        theme = currentTheme
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                } else if (isLoadingBanners) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(currentTheme.surfaceColor)
+                    ) {
+                        CircularProgressIndicator(color = currentTheme.primaryColor, modifier = Modifier.size(28.dp))
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+
                 MengajiBookmarkTrackerCard(
                     theme = currentTheme,
                     lastQuran = lastQuranMark,
@@ -429,7 +419,6 @@ fun PandaMuslimHomeScreen(
 
         item(key = "bottom_sections") {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                // ZONA PINTAR & EDUKASI MENGGUNAKAN 6 IKON DRAWABLE BARU ANDA!
                 SixNewFeaturesGridSection(
                     theme = currentTheme,
                     onSelectFeature = { route -> onMenuClick(route) }
@@ -477,6 +466,19 @@ fun PandaMuslimHomeScreen(
                 }
                 Spacer(modifier = Modifier.height(10.dp))
                 PrayerTimesRow(prayerTimes = prayerTimes, theme = currentTheme)
+                Surface(
+                    color = GoldAccent,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.clickable { onMenuClick("Imsakiyah") }
+                ) {
+                    Text(
+                        text = "🌙 Jadwal Imsakiyah & Puasa",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFF0F172A),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
@@ -532,9 +534,6 @@ fun PandaMuslimHomeScreen(
     }
 }
 
-// =========================================================================
-// ZONA PINTAR & PERMAINAN EDUKASI DENGAN 6 IKON PANDA 3D DARI DRAWABLE
-// =========================================================================
 @Composable
 fun SixNewFeaturesGridSection(
     theme: KidsAppTheme,
@@ -708,6 +707,16 @@ fun BannerCarouselSlider3D(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    if (slide.arabicText.isNotBlank()) {
+                                        Text(
+                                            text = slide.arabicText,
+                                            color = theme.accentColor,
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         } else {
@@ -1515,43 +1524,74 @@ fun CityPickerDialog(
 }
 
 // =========================================================================
-// HELPER DETEKSI GAMBAR & THUMBNAIL YOUTUBE OTOMATIS
+// HELPER DETEKSI GAMBAR SERVER & THUMBNAIL YOUTUBE OTOMATIS (ANTI-ERROR)
 // =========================================================================
+fun normalizeServerMediaUrl(rawUrl: String): String {
+    val clean = rawUrl.trim()
+    if (clean.isBlank()) return ""
+    if (clean.startsWith("http://") || clean.startsWith("https://")) {
+        return clean.replace(" ", "%20")
+    }
+    return "https://pandamuslim.pandakode-dev.my.id/${clean.trimStart('/')}".replace(" ", "%20")
+}
+
 fun extractYoutubeVideoId(url: String): String? {
     if (url.isBlank()) return null
     val patterns = listOf(
-        "v=([a-zA-Z0-9_-]{11})",
+        "(?:v=|/)([a-zA-Z0-9_-]{11})(?:[?&]|$)",
         "youtu\\.be/([a-zA-Z0-9_-]{11})",
         "embed/([a-zA-Z0-9_-]{11})",
-        "shorts/([a-zA-Z0-9_-]{11})"
+        "shorts/([a-zA-Z0-9_-]{11})",
+        "live/([a-zA-Z0-9_-]{11})"
     )
     for (p in patterns) {
-        val match = Regex(p).find(url)
+        val match = Regex(p).find(url.trim())
         if (match != null) return match.groupValues[1]
     }
     return null
 }
 
 fun extractMediaPreviewUrl(rawMediaUrl: String): String {
+    if (rawMediaUrl.isBlank()) return ""
     val parts = rawMediaUrl.split("|")
-    val directImg = parts.find { it.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)$", RegexOption.IGNORE_CASE)) }
-    if (!directImg.isNullOrBlank()) return directImg
 
+    // 1. Cek jika ada gambar langsung (.jpg / .png / .webp)
     for (part in parts) {
-        val ytId = extractYoutubeVideoId(part)
+        val clean = part.trim()
+        if (clean.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)(\\?.*)?$", RegexOption.IGNORE_CASE))) {
+            return normalizeServerMediaUrl(clean)
+        }
+    }
+
+    // 2. Cek jika mengandung Link YouTube -> ambil Thumbnail HQ otomatis!
+    for (part in parts) {
+        val ytId = extractYoutubeVideoId(part.trim())
         if (ytId != null) {
             return "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
         }
     }
+
+    val directYt = extractYoutubeVideoId(rawMediaUrl)
+    if (directYt != null) {
+        return "https://img.youtube.com/vi/$directYt/hqdefault.jpg"
+    }
+
     return ""
 }
+
+fun extractImageUrl(rawMediaUrl: String): String = extractMediaPreviewUrl(rawMediaUrl)
 
 suspend fun fetchContentsFromServer(category: String): List<ServerContent> = withContext(Dispatchers.IO) {
     val resultList = mutableListOf<ServerContent>()
     try {
-        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=get_contents&category=$category")
+        val ts = System.currentTimeMillis()
+        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=get_contents&category=$category&_t=$ts")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
+        conn.useCaches = false
+        conn.setRequestProperty("Cache-Control", "no-cache")
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
         if (conn.responseCode == 200) {
             val response = conn.inputStream.bufferedReader().readText()
             val jsonObj = JSONObject(response)
@@ -1575,32 +1615,40 @@ suspend fun fetchContentsFromServer(category: String): List<ServerContent> = wit
     resultList
 }
 
-fun extractImageUrl(rawMediaUrl: String): String {
-    return extractMediaPreviewUrl(rawMediaUrl)
-}
-
 @Composable
 fun NetworkImageLoader(imageUrl: String, modifier: Modifier = Modifier) {
     var bitmap by remember(imageUrl) { mutableStateOf<Bitmap?>(null) }
     var isFailed by remember(imageUrl) { mutableStateOf(false) }
 
     LaunchedEffect(imageUrl) {
+        if (imageUrl.isBlank()) {
+            isFailed = true
+            return@LaunchedEffect
+        }
         withContext(Dispatchers.IO) {
             try {
-                val url = URL(imageUrl)
+                val normalized = normalizeServerMediaUrl(imageUrl)
+                val url = URL(normalized)
                 val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 7000
-                conn.readTimeout = 7000
+                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; PandaMuslimApp)")
                 conn.doInput = true
                 conn.connect()
-                bitmap = BitmapFactory.decodeStream(conn.inputStream)
+                val decoded = BitmapFactory.decodeStream(conn.inputStream)
+                if (decoded != null) {
+                    bitmap = decoded
+                } else {
+                    isFailed = true
+                }
             } catch (_: Exception) {
                 isFailed = true
             }
         }
     }
 
-    Box(contentAlignment = Alignment.Center, modifier = modifier.background(MintSurface)) {
+    Box(contentAlignment = Alignment.Center, modifier = modifier.background(EmeraldDark)) {
         when {
             bitmap != null -> {
                 Image(
@@ -1611,10 +1659,13 @@ fun NetworkImageLoader(imageUrl: String, modifier: Modifier = Modifier) {
                 )
             }
             isFailed -> {
-                Text("🎬", fontSize = 28.sp)
+                MosqueSilhouetteOrnamentCanvas(
+                    accentColor = GoldAccent,
+                    modifier = Modifier.matchParentSize()
+                )
             }
             else -> {
-                CircularProgressIndicator(color = EmeraldPrimary, modifier = Modifier.size(24.dp))
+                CircularProgressIndicator(color = GoldAccent, modifier = Modifier.size(24.dp))
             }
         }
     }
