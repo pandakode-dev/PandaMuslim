@@ -60,7 +60,27 @@ fun TantanganKebaikanScreen(onBack: () -> Unit) {
     val prefs = remember { context.getSharedPreferences("panda_good_deeds_prefs", Context.MODE_PRIVATE) }
     val todayKey = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
-    val allQuests = remember { getDailyGoodDeedsQuests() }
+    var allQuests by remember { mutableStateOf(getDailyGoodDeedsQuests()) }
+    LaunchedEffect(Unit) {
+        val webQuests = fetchContentsFromServer("misi")
+        if (webQuests.isNotEmpty()) {
+            val mapped = webQuests.map { q ->
+                val parts = q.latinText.split("|")
+                val catName = parts.getOrNull(0)?.trim()?.ifBlank { "Amalan Harian" } ?: "Amalan Harian"
+                val stars = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 15
+                DailyChallengeQuest(
+                    id = q.id,
+                    category = catName,
+                    emoji = q.arabicText.ifBlank { "🌟" }.take(2),
+                    title = q.title,
+                    description = q.description,
+                    rewardStars = stars,
+                    dalilShort = "Misi kebaikan dari Admin PandaMuslim"
+                )
+            }
+            allQuests = mapped + getDailyGoodDeedsQuests()
+        }
+    }
     var totalStars by remember { mutableStateOf(prefs.getInt("deed_total_stars", 0)) }
 
     val completedIdsToday = remember {

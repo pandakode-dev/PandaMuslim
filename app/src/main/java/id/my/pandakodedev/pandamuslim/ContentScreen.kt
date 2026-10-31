@@ -213,6 +213,7 @@ fun DynamicContentScreen(
             rawMediaUrl = rawMediaUrl,
             tts = ttsEngine,
             mediaPlayer = bgMediaPlayer,
+            isIqroMode = (categoryKey == "iqro"), // <-- KHUSUS IQRO: Baca semua harakat akhir secara hidup (tidak dimatikan!)
             onStartStatus = { statusMsg ->
                 activeSpeakingTitle = "$statusMsg  ($latinText)"
             }
@@ -225,11 +226,31 @@ fun DynamicContentScreen(
         } catch (_: Exception) {}
 
         if (currentlyReadingExplanationItem?.id == item.id) {
-            ttsEngine?.stop()
+            IndonesianStorytellerEngine.stopStorytelling(ttsEngine)
             currentlyReadingExplanationItem = null
             activeSpeakingTitle = null
         } else {
             currentlyReadingExplanationItem = item
+            val sentences = IndonesianStorytellerEngine.splitIntoNaturalSentences(
+                rawTitle = item.title,
+                rawBody = item.description
+            )
+            IndonesianStorytellerEngine.startExpressiveStorytelling(
+                tts = ttsEngine,
+                sentences = sentences,
+                style = StorytellerVoiceStyle.KAKAK_LEMBUT,
+                onSentenceHighlight = { idx ->
+                    activeExplanationSentenceIdx = idx
+                    if (idx in sentences.indices) {
+                        activeSpeakingTitle = "🌸 ${sentences[idx]}"
+                    }
+                },
+                onFinished = {
+                    currentlyReadingExplanationItem = null
+                    activeExplanationSentenceIdx = -1
+                    activeSpeakingTitle = null
+                }
+            )
         }
     }
 

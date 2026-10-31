@@ -3,16 +3,285 @@ package id.my.pandakodedev.pandamuslim
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
-import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 
+object ServerAudioAndFeatureConfig {
+    var arabSpeechRate: Float = 0.64f
+    var arabPitch: Float = 0.88f
+    var indoSpeechRate: Float = 0.90f
+    var indoPitch: Float = 1.04f
+    var customPhoneticMap: MutableMap<String, String> = mutableMapOf()
+
+    var enableMisiKebaikan: Boolean = true
+    var enableKisahWanita: Boolean = true
+    var enableTtsIslami: Boolean = true
+    var enableJurnalSyukur: Boolean = true
+    var enableLukisKaligrafi: Boolean = true
+    var enableImsakiyah: Boolean = true
+
+    suspend fun syncFromWebServer() = withContext(Dispatchers.IO) {
+        try {
+            val ts = System.currentTimeMillis()
+            val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=get_app_config&_t=$ts")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 6000
+            conn.readTimeout = 6000
+            if (conn.responseCode == 200) {
+                val cfg = JSONObject(conn.inputStream.bufferedReader().readText()).getJSONObject("config")
+                arabSpeechRate = cfg.optDouble("arab_speech_rate", 0.64).toFloat()
+                arabPitch = cfg.optDouble("arab_pitch", 0.88).toFloat()
+                indoSpeechRate = cfg.optDouble("indo_speech_rate", 0.90).toFloat()
+                indoPitch = cfg.optDouble("indo_pitch", 1.04).toFloat()
+
+                enableMisiKebaikan = cfg.optBoolean("enable_misi", true)
+                enableKisahWanita = cfg.optBoolean("enable_wanita", true)
+                enableTtsIslami = cfg.optBoolean("enable_tts", true)
+                enableJurnalSyukur = cfg.optBoolean("enable_jurnal", true)
+                enableLukisKaligrafi = cfg.optBoolean("enable_kaligrafi", true)
+                enableImsakiyah = cfg.optBoolean("enable_imsakiyah", true)
+
+                val rawRules = cfg.optString("phonetic_overrides", "")
+                if (rawRules.isNotBlank()) {
+                    val newMap = mutableMapOf<String, String>()
+                    rawRules.lines().forEach { line ->
+                        val parts = line.split("=")
+                        if (parts.size == 2) {
+                            newMap[parts[0].trim()] = parts[1].trim()
+                        }
+                    }
+                    customPhoneticMap = newMap
+                }
+            }
+        } catch (_: Exception) {}
+    }
+}
+
+enum class StorytellerVoiceStyle(
+    val label: String,
+    val basePitch: Float,
+    val baseRate: Float,
+    val preferFemale: Boolean
+) {
+    KAKAK_LEMBUT("🌸 Suara Lembut (Natural)", 1.04f, 0.90f, true),
+    USTADZ_TEDUH("🎙️ Suara Teduh (Wibawa)", 0.92f, 0.88f, false),
+    CERIA_EKSPRESIF("✨ Suara Ceria Anak", 1.12f, 0.94f, true)
+}
+
 /**
- * MESIN AUDIO TAJWID GENERASI BARU (ANTI-TIPIS "ALLAH" & 100% MATI SAAT WAQAF)
- * 1. Mengubah fonetik Lafadz Jalalah setelah Fathah/Dhammah agar keluar suara bulat "Allooh"
- * 2. Memecah setiap frasa Waqaf menjadi antrean suara terpisah (QUEUE_ADD) + menghapus vokal akhir
- *    agar TTS 100% mematikan huruf terakhir di setiap jeda waqaf dan akhir kalimat!
+ * ============================================================================
+ * BAGIAN 1: MESIN PENDONGENG BAHASA INDONESIA LEMBUT & NATURAL
+ * ============================================================================
+ */
+object IndonesianStorytellerEngine {
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var currentSentences: List<String> = emptyList()
+    private var currentStyle: StorytellerVoiceStyle = StorytellerVoiceStyle.KAKAK_LEMBUT
+    private var isCurrentlyPlaying: Boolean = false
+    private var onSentenceChangedCallback: ((Int) -> Unit)? = null
+    private var onStoryFinishedCallback: (() -> Unit)? = null
+
+    fun splitIntoNaturalSentences(rawTitle: String, rawBody: String): List<String> {
+        val cleanTitle = rawTitle.replace(Regex("\\[.*?\\]"), "").trim()
+        val combined = if (cleanTitle.isNotBlank()) "$cleanTitle. $rawBody" else rawBody
+
+        return combined
+            .replace("\r\n", "\n")
+            .replace(Regex("\n+"), ". ")
+            .split(Regex("(?<=[.!?])\\s+"))
+            .map { it.trim() }
+            .filter { it.length > 2 }
+    }
+
+    fun humanizeIndonesianIslamicText(rawSentence: String): String {
+        var s = rawSentence
+            .replace(Regex("[📌🔊📖🌟⚠️🛡️•➔✅❌🕌🤲💧☝️🤝👑🏰🕊️🌸📚🐪🌍✒️🚢🌪️🕋🌊🏛️🏔️🦅⛰️🐋🌙✨🎉]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+        s = s.replace(Regex("\\bSAW\\b"), "Shallallaahu 'alaihi wa sallam")
+        s = s.replace("ﷺ", "Shallallaahu 'alaihi wa sallam")
+        s = s.replace(Regex("\\bSWT\\b"), "Subhaanahu wa Ta'aalaa")
+        s = s.replace(Regex("\\bAS\\b"), "'Alaihis salaam")
+        s = s.replace(Regex("\\bRA\\b"), "Radhiyallaahu 'anhaa")
+        s = s.replace(Regex("\\bHR\\.\\s*"), "Hadits Riwayat ")
+        s = s.replace(Regex("\\bQS\\.\\s*"), "Al-Quran Surah ")
+        s = s.replace("sholat", "shalat", ignoreCase = true)
+
+        val storytellingConnectors = listOf(
+            "Dahulu kala" to "Dahulu kala,",
+            "Pada suatu hari" to "Pada suatu hari,",
+            "Ketika itu" to "Ketika itu,",
+            "Namun" to "Namun,",
+            "Akhirnya" to "Akhirnya,",
+            "Oleh karena itu" to "Oleh karena itu,",
+            "Artinya:" to "Artinya, "
+        )
+        for ((oldWord, newWord) in storytellingConnectors) {
+            if (s.startsWith(oldWord, ignoreCase = true) && !s.startsWith(newWord, ignoreCase = true)) {
+                s = newWord + s.substring(oldWord.length)
+            }
+        }
+
+        return s.trim()
+    }
+
+    fun configureSoftIndonesianVoice(
+        tts: TextToSpeech,
+        style: StorytellerVoiceStyle = StorytellerVoiceStyle.KAKAK_LEMBUT
+    ) {
+        val indoLocale = Locale("id", "ID")
+        tts.language = indoLocale
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val indoVoices = tts.voices?.filter {
+                    it.locale.language.equals("id", ignoreCase = true) ||
+                            it.locale.language.equals("in", ignoreCase = true)
+                }.orEmpty()
+
+                if (indoVoices.isNotEmpty()) {
+                    val bestVoice: Voice? = indoVoices.maxByOrNull { v ->
+                        val name = v.name.lowercase()
+                        var score = v.quality
+                        if (name.contains("network") || name.contains("wavenet") || name.contains("neural")) {
+                            score += 200
+                        }
+                        if (style.preferFemale) {
+                            if (name.contains("female") || name.contains("ide") || name.contains("gad")) score += 80
+                        } else {
+                            if (name.contains("male") || name.contains("dfz") || name.contains("idc")) score += 80
+                        }
+                        score
+                    }
+                    if (bestVoice != null) {
+                        tts.voice = bestVoice
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        tts.setPitch(ServerAudioAndFeatureConfig.indoPitch)
+        tts.setSpeechRate(ServerAudioAndFeatureConfig.indoSpeechRate)
+    }
+
+    fun startExpressiveStorytelling(
+        tts: TextToSpeech?,
+        sentences: List<String>,
+        style: StorytellerVoiceStyle = StorytellerVoiceStyle.KAKAK_LEMBUT,
+        onSentenceHighlight: (Int) -> Unit,
+        onFinished: () -> Unit
+    ) {
+        if (tts == null || sentences.isEmpty()) {
+            onFinished()
+            return
+        }
+
+        stopStorytelling(tts)
+
+        currentSentences = sentences
+        currentStyle = style
+        isCurrentlyPlaying = true
+        onSentenceChangedCallback = onSentenceHighlight
+        onStoryFinishedCallback = onFinished
+
+        configureSoftIndonesianVoice(tts, style)
+
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                val idx = utteranceId?.removePrefix("indo_story_")?.toIntOrNull() ?: return
+                mainHandler.post {
+                    if (isCurrentlyPlaying) {
+                        onSentenceChangedCallback?.invoke(idx)
+                    }
+                }
+            }
+
+            override fun onDone(utteranceId: String?) {
+                val idx = utteranceId?.removePrefix("indo_story_")?.toIntOrNull() ?: return
+                val nextIdx = idx + 1
+                if (isCurrentlyPlaying && nextIdx < currentSentences.size) {
+                    mainHandler.postDelayed({
+                        if (isCurrentlyPlaying) {
+                            speakSentenceAtIndex(tts, nextIdx)
+                        }
+                    }, 320L)
+                } else if (nextIdx >= currentSentences.size) {
+                    mainHandler.post {
+                        isCurrentlyPlaying = false
+                        onStoryFinishedCallback?.invoke()
+                    }
+                }
+            }
+
+            override fun onError(utteranceId: String?) {
+                mainHandler.post {
+                    isCurrentlyPlaying = false
+                    onStoryFinishedCallback?.invoke()
+                }
+            }
+        })
+
+        speakSentenceAtIndex(tts, 0)
+    }
+
+    private fun speakSentenceAtIndex(tts: TextToSpeech, index: Int) {
+        if (!isCurrentlyPlaying || index !in currentSentences.indices) return
+
+        val rawSentence = currentSentences[index]
+        val humanizedText = humanizeIndonesianIslamicText(rawSentence)
+
+        val basePitch = if (currentStyle == StorytellerVoiceStyle.KAKAK_LEMBUT) {
+            ServerAudioAndFeatureConfig.indoPitch
+        } else {
+            currentStyle.basePitch
+        }
+        val baseRate = ServerAudioAndFeatureConfig.indoSpeechRate
+
+        val dynamicPitch = when {
+            index == 0 -> basePitch + 0.04f
+            rawSentence.endsWith("!") -> basePitch + 0.06f
+            rawSentence.endsWith("?") -> basePitch + 0.08f
+            rawSentence.contains("berdoa", ignoreCase = true) ||
+                    rawSentence.contains("Artinya", ignoreCase = true) -> basePitch - 0.04f
+            index % 2 == 0 -> basePitch + 0.02f
+            else -> basePitch - 0.01f
+        }
+
+        tts.setPitch(dynamicPitch)
+        tts.setSpeechRate(baseRate)
+        tts.speak(humanizedText, TextToSpeech.QUEUE_FLUSH, null, "indo_story_$index")
+    }
+
+    fun stopStorytelling(tts: TextToSpeech?) {
+        isCurrentlyPlaying = false
+        mainHandler.removeCallbacksAndMessages(null)
+        try {
+            tts?.stop()
+        } catch (_: Exception) {}
+    }
+}
+
+/**
+ * ============================================================================
+ * BAGIAN 2: MESIN AUDIO TAJWID ARAB, MODE IQRO (HIDUP UTUH) & MODE DOA (WAQAF)
+ * - Jika isIqroMode = true: Semua harakat akhir (Fathah/Kasrah/Dhammah/Tanwin)
+ *   DIBACA HIDUP UTUH (misal: كَتَبَ = Ka-Ta-Ba, bukan Katab!), KECUALI ada tanda
+ *   lingkaran waqaf (۝) atau simbol panah berhenti (➔).
+ * - Jika isIqroMode = false (Doa, Tasbih, Asmaul Husna): Huruf terakhir di setiap
+ *   jeda waqaf otomatis dimatikan (Sukun).
+ * ============================================================================
  */
 object ArabicWaqafPhoneticEngine {
 
@@ -21,11 +290,13 @@ object ArabicWaqafPhoneticEngine {
         rawMediaUrl: String = "",
         tts: TextToSpeech?,
         mediaPlayer: MediaPlayer,
+        isIqroMode: Boolean = false,
         onStartStatus: (String) -> Unit = {}
     ) {
         if (arabicText.isBlank()) return
 
-        // 1. Prioritaskan MP3 Qari Asli jika tersedia di URL
+        IndonesianStorytellerEngine.stopStorytelling(tts)
+
         val parts = rawMediaUrl.split("|")
         val directMp3Url = parts.find {
             it.trim().matches(Regex(".*\\.(mp3|wav|ogg|m4a)(\\?.*)?$", RegexOption.IGNORE_CASE))
@@ -49,34 +320,33 @@ object ArabicWaqafPhoneticEngine {
                     mp.start()
                 }
                 mediaPlayer.setOnErrorListener { _, _, _ ->
-                    speakPerWaqafChunks(arabicText, tts, mediaPlayer, onStartStatus)
+                    speakPerChunks(arabicText, tts, mediaPlayer, isIqroMode, onStartStatus)
                     true
                 }
                 return
             } catch (_: Exception) {}
         }
 
-        // 2. Gunakan Mesin Pemecah Antrean Waqaf & Fonetik Tafkhim "Allooh"
-        speakPerWaqafChunks(arabicText, tts, mediaPlayer, onStartStatus)
+        speakPerChunks(arabicText, tts, mediaPlayer, isIqroMode, onStartStatus)
     }
 
-    /**
-     * Memecah bacaan per titik Waqaf (koma/tanda berhenti) lalu mengirimnya satu per satu
-     * ke antrean TTS dengan jeda napas (Silent Pause), sehingga setiap ujung Waqaf PASTI MATI (Sukun)!
-     */
-    private fun speakPerWaqafChunks(
+    private fun speakPerChunks(
         rawArabic: String,
         tts: TextToSpeech?,
         mediaPlayer: MediaPlayer,
+        isIqroMode: Boolean,
         onStartStatus: (String) -> Unit
     ) {
         onStartStatus("🔊 Melafalkan: $rawArabic")
 
-        // Pecah kalimat menjadi daftar potongan Waqaf yang sudah diolah fonetik tebal & sukunnya
-        val waqafChunks = buildPhoneticWaqafChunks(rawArabic)
-        if (waqafChunks.isEmpty()) return
+        val chunks = buildPhoneticChunks(rawArabic, isIqroMode = isIqroMode)
+        if (chunks.isEmpty()) return
 
-        val isNativeArabicReady = tts != null && configureStrictArabicVoice(tts, speechRate = 0.65f, pitch = 0.88f)
+        val isNativeArabicReady = tts != null && configureStrictArabicVoice(
+            tts = tts,
+            speechRate = ServerAudioAndFeatureConfig.arabSpeechRate,
+            pitch = ServerAudioAndFeatureConfig.arabPitch
+        )
 
         if (isNativeArabicReady && tts != null) {
             try {
@@ -85,20 +355,18 @@ object ArabicWaqafPhoneticEngine {
 
             tts.stop()
 
-            waqafChunks.forEachIndexed { index, chunk ->
+            chunks.forEachIndexed { index, chunk ->
                 val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-                tts.speak(chunk, queueMode, null, "waqaf_chunk_${System.currentTimeMillis()}_$index")
+                tts.speak(chunk, queueMode, null, "arab_chunk_${System.currentTimeMillis()}_$index")
 
-                // Tambahkan jeda napas (Waqaf) 320ms antar potongan kalimat agar tidak disambung oleh TTS!
-                if (index < waqafChunks.lastIndex) {
+                if (index < chunks.lastIndex) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         tts.playSilentUtterance(320L, TextToSpeech.QUEUE_ADD, "pause_$index")
                     }
                 }
             }
         } else {
-            // Fallback Cloud Native Arabic Stream
-            playCloudNativeArabicStream(waqafChunks.joinToString(" . "), mediaPlayer)
+            playCloudNativeArabicStream(chunks.joinToString(" ، "), mediaPlayer)
         }
     }
 
@@ -121,8 +389,8 @@ object ArabicWaqafPhoneticEngine {
 
     fun configureStrictArabicVoice(
         tts: TextToSpeech,
-        speechRate: Float = 0.65f,
-        pitch: Float = 0.88f
+        speechRate: Float = ServerAudioAndFeatureConfig.arabSpeechRate,
+        pitch: Float = ServerAudioAndFeatureConfig.arabPitch
     ): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -167,12 +435,20 @@ object ArabicWaqafPhoneticEngine {
         }
     }
 
-    /**
-     * Memecah teks Arab menjadi potongan-potongan frasa per tanda Waqaf (، / - / ۝ / .)
-     * dan mengubah setiap potongan menjadi ejaan fonetik suara yang 100% tepat makhraj,
-     * tebal pada "Allooh", dan MATI (Sukun) pada huruf paling ujung.
-     */
+    fun configureBestArabicVoice(tts: TextToSpeech, speechRate: Float = ServerAudioAndFeatureConfig.arabSpeechRate) {
+        configureStrictArabicVoice(tts, speechRate = speechRate, pitch = ServerAudioAndFeatureConfig.arabPitch)
+    }
+
     fun buildPhoneticWaqafChunks(rawArabic: String): List<String> {
+        return buildPhoneticChunks(rawArabic, isIqroMode = false)
+    }
+
+    /**
+     * Memecah teks menjadi segmen-segmen bacaan.
+     * - Jika isIqroMode == true: mempertahankan simbol '۝' di dalam segmen agar sistem tahu
+     *   mana kata Iqro yang harakat akhirnya wajib dibaca hidup utuh (tanpa '۝') dan mana yang latihan waqaf (ada '۝').
+     */
+    fun buildPhoneticChunks(rawArabic: String, isIqroMode: Boolean = false): List<String> {
         if (rawArabic.isBlank()) return emptyList()
 
         val trimmed = rawArabic.trim()
@@ -184,49 +460,72 @@ object ArabicWaqafPhoneticEngine {
             "كهيعص" -> return listOf("كَاااافْ", "هَااااءْ", "يَااااءْ", "عَيْنْ", "صَاااادْ")
         }
 
-        // Normalisasi semua tanda pemisah waqaf menjadi karakter '|'
-        val normalizedSeparators = trimmed
-            .replace("۝", "|")
-            .replace("،", "|")
-            .replace(",", "|")
-            .replace("—", "|")
-            .replace("-", "|")
-            .replace("•", "|")
-            .replace("؛", "|")
-            .replace(".", "|")
-            .replace(Regex("\\s{2,}"), "|")
+        val normalizedSeparators = if (isIqroMode) {
+            // Pada Mode Iqro, pertahankan tanda ۝ di ujung kata sebagai penanda latihan Waqaf Iqro 5-6
+            trimmed
+                .replace("۝", "۝|")
+                .replace("،", "|")
+                .replace(",", "|")
+                .replace("—", "|")
+                .replace("-", "|")
+                .replace("•", "|")
+                .replace("؛", "|")
+                .replace(Regex("\\s{2,}"), "|")
+        } else {
+            trimmed
+                .replace("۝", "|")
+                .replace("،", "|")
+                .replace(",", "|")
+                .replace("—", "|")
+                .replace("-", "|")
+                .replace("•", "|")
+                .replace("؛", "|")
+                .replace(".", "|")
+                .replace(Regex("\\s{2,}"), "|")
+        }
 
         val rawSegments = normalizedSeparators.split("|")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
         return rawSegments.map { seg ->
-            convertSingleChunkToPhoneticTajwid(seg)
+            convertSingleChunkToPhoneticTajwid(seg, isIqroMode = isIqroMode)
         }
     }
 
-    fun toTajwidAndWaqafRecitationText(rawArabic: String): String {
-        return buildPhoneticWaqafChunks(rawArabic).joinToString(" . ")
+    fun toTajwidAndWaqafRecitationText(rawArabic: String, isIqroMode: Boolean = false): String {
+        return buildPhoneticChunks(rawArabic, isIqroMode = isIqroMode).joinToString(" . ")
     }
 
     fun toAsmaulHusnaWaqaf(rawName: String): String {
-        return convertSingleChunkToPhoneticTajwid(rawName)
+        return convertSingleChunkToPhoneticTajwid(rawName, isIqroMode = false)
     }
 
     fun toWaqafRecitationText(rawArabic: String): String {
-        return buildPhoneticWaqafChunks(rawArabic).joinToString(" . ")
+        return buildPhoneticChunks(rawArabic, isIqroMode = false).joinToString(" . ")
     }
 
-    /**
-     * Mengolah 1 potongan frasa Waqaf:
-     * 1. Cek kamus emas Dzikir/Tasbih agar "Subhaanallooh", "Astaghfirullooh", "wa bihamdih" 100% akurat
-     * 2. Suntikkan fonetik tebal "Allooh" (اللَّـاه)
-     * 3. Matikan (Sukunkan) huruf paling ujung dari potongan ini!
-     */
-    private fun convertSingleChunkToPhoneticTajwid(segment: String): String {
-        val cleanSeg = segment.trim()
+    private fun convertSingleChunkToPhoneticTajwid(segment: String, isIqroMode: Boolean = false): String {
+        var cleanSeg = segment.trim()
 
-        // 1. KAMUS HURUF TUNGGAL IQRO BERHARAKAT
+        // Cek apakah segmen ini memiliki tanda berhenti eksplisit (۝ atau ➔)
+        val hasExplicitWaqafSymbol = cleanSeg.contains("۝") || cleanSeg.contains("➔")
+        if ( cleanSeg.contains("➔")) {
+            // Jika ada tanda panah contoh waqaf (misal: جَنَّةٌ ➔ جَنَّهْ), baca keduanya dengan jeda
+            val arrowParts = cleanSeg.split("➔").map { it.trim() }
+            if (arrowParts.size == 2) {
+                val p1 = preserveIqroFullEndingVowels(arrowParts[0])
+                val p2 = forceKillLastVowelForWaqaf(arrowParts[1])
+                return "$p1 ، $p2"
+            }
+        }
+        cleanSeg = cleanSeg.replace("۝", "").trim()
+
+        if (ServerAudioAndFeatureConfig.customPhoneticMap.containsKey(cleanSeg)) {
+            return ServerAudioAndFeatureConfig.customPhoneticMap[cleanSeg]!!
+        }
+
+        // 1. KAMUS HURUF TUNGGAL IQRO BERHARAKAT (FATHAH, KASRAH, DHAMMAH, TANWIN)
         val singleLetterMakhrajMap = mapOf(
             "أَ" to "أَهْ", "اَ" to "أَهْ", "ءَ" to "أَهْ",
             "بَ" to "بَهْ", "تَ" to "تَهْ", "ثَ" to "ثَهْ",
@@ -248,7 +547,15 @@ object ArabicWaqafPhoneticEngine {
             "رُ" to "رُهْ", "زُ" to "زُهْ", "سُ" to "سُهْ", "شُ" to "شُهْ", "صُ" to "صُهْ",
             "ضُ" to "ضُهْ", "طُ" to "طُهْ", "ظُ" to "ظُهْ", "عُ" to "عُهْ", "غُ" to "غُهْ",
             "فُ" to "فُهْ", "قُ" to "قُهْ", "كُ" to "كُهْ", "لُ" to "لُهْ", "مُ" to "مُهْ",
-            "نُ" to "نُهْ", "وُ" to "وُهْ", "هُ" to "هُهْ", "يُ" to "يُهْ"
+            "نُ" to "نُهْ", "وُ" to "وُهْ", "هُ" to "هُهْ", "يُ" to "يُهْ",
+            // Tanwin Tunggal (Ban - Bin - Bun)
+            "أً" to "أَنْ", "بً" to "بَنْ", "تً" to "تَنْ", "ثً" to "ثَنْ", "جً" to "جَنْ",
+            "حً" to "حَنْ", "خً" to "خَوْنْ", "دً" to "دَنْ", "ذً" to "ذَنْ", "رً" to "رَوْنْ",
+            "زً" to "زَنْ", "سً" to "سَنْ", "شً" to "شَنْ", "صً" to "صَوْنْ", "ضً" to "ضَوْنْ",
+            "طً" to "طَوْنْ", "ظً" to "ظَوْنْ", "عً" to "عَنْ", "غً" to "غَوْنْ", "فً" to "فَنْ",
+            "قً" to "قَوْنْ", "كً" to "كَنْ", "لً" to "لَنْ", "مً" to "مَنْ", "نً" to "نَنْ",
+            "وً" to "وَنْ", "هً" to "هَنْ", "يً" to "يَنْ",
+            "بٍ" to "بِنْ", "تٍ" to "تِنْ", "بٌ" to "بُنْ", "تٌ" to "تُنْ"
         )
 
         if (singleLetterMakhrajMap.containsKey(cleanSeg)) {
@@ -257,29 +564,33 @@ object ArabicWaqafPhoneticEngine {
 
         val splitSingleWords = cleanSeg.split(Regex("\\s+"))
         if (splitSingleWords.all { singleLetterMakhrajMap.containsKey(it) }) {
-            return splitSingleWords.joinToString(" . ") { singleLetterMakhrajMap[it] ?: it }
+            return splitSingleWords.joinToString(" ، ") { singleLetterMakhrajMap[it] ?: it }
         }
 
-        // 2. MATIKAN HURUF TERAKHIR PADA POTONGAN WAQAF INI TERLEBIH DAHULU
-        var s = forceKillLastVowelForWaqaf(cleanSeg)
+        // 2. PEMISAHAN LOGIKA AKHIR KATA: MODE IQRO (HIDUP UTUH) vs MODE DOA/TASBIH (WAQAF MATI)
+        var s = if (isIqroMode && !hasExplicitWaqafSymbol) {
+            // KHUSUS IQRO TANPA SIMBOL WAQAF: Baca semua harakat akhir secara hidup & utuh!
+            preserveIqroFullEndingVowels(cleanSeg)
+        } else {
+            // UNTUK DOA, TASBIH, ASMAUL HUSNA, ATAU IQRO YANG ADA SIMBOL ۝: Matikan huruf akhir!
+            forceKillLastVowelForWaqaf(cleanSeg)
+        }
 
-        // 3. INJEKSI FONETIK TAFKHIM "ALLOOH" (MEMAKSA TTS MEMBACA TEBAL "LOH" BUKAN "LAH"!)
-        // Rahasia Teknis: TTS Google Arab membaca "اللَّه" sebagai "Allah" tipis.
-        // Tetapi jika setelah Fathah/Dhammah kita ubah fonetik suaranya menjadi "اللَّـاهْ" / "اللَّوْه"
-        // dengan vokal pengunci Dhod/Wawu halus, TTS membulatkan suara menjadi "Allooh" tebal!
-        s = injectHeavyAlloohPhonetics(s)
+        // 3. Terapkan difton fonetik "Aullooh, Subhaanaullooh, Illaullooh"
+        s = injectHeavyAulloohPhonetics(s, isIqroMode = isIqroMode && !hasExplicitWaqafSymbol)
 
-        // 4. TARIKAN MAD PANJANG (2, 4, 6 HARAKAT)
+        // 4. Tarikan Mad Panjang (2, 4, 6 Harakat)
         s = s.replace(Regex("\u0627\u0653(.)\u0651"), "اااا$1\u0651")
         s = s.replace("\u0627\u0653", "اااا")
         s = s.replace("آ", "أَااا")
         s = s.replace("اء", "اااء")
         s = s.replace("ِيء", "ِيييء")
         s = s.replace("ُوء", "ُوووء")
+        s = s.replace("\u0670", "\u064Eاا") // Fathah berdiri (هَٰذَا , تَعَالَىٰ) ditarik 2 ketukan
         s = s.replace("ۦ", "يي")
         s = s.replace("ۥ", "وو")
 
-        // 5. DENGUNG GHUNNAH
+        // 5. Dengung Ghunnah
         s = s.replace("إِنَّ", "إِنْنَّ")
         s = s.replace("عَمَّ", "عَمْمَّ")
         s = s.replace("ثُمَّ", "ثُمْمَّ")
@@ -288,122 +599,161 @@ object ArabicWaqafPhoneticEngine {
     }
 
     /**
-     * Memaksa mesin TTS mengucapkan "Allooh" (tebal/bulat) ketika Lafadz Allah
-     * didahului oleh Fathah atau Dhammah, dan tetap tipis "Lillaah" ketika didahului Kasrah.
+     * KHUSUS MODE IQRO (JILID 1-6 TANPA TANDA WAQAF ۝):
+     * Memastikan huruf paling akhir pada kata Iqro TIDAK DIMATIKAN oleh mesin TTS!
+     * - Contoh Iqro 2: كَتَبَ -> dikunci menjadi كَتَبَهْ sehingga 100% berbunyi "Ka-Ta-Ba" (bukan "Katab")
+     * - Contoh Iqro 3: كُتِبَ -> كُتِبَهْ ("Ku-Ti-Ba"), يَقُولُ -> يَقُولُهْ ("Ya-Quu-Lu")
+     * - Contoh Iqro 4: كِتَابًا -> كِتَابَنْ ("Kitaaban"), عَلِيمٌ -> عَلِيمُنْ ("'Aliimun"), حَكِيمٍ -> حَكِيمِنْ ("Hakiimin")
+     * - Jika huruf terakhir memang sudah bertanda Sukun (أَبْ / أَنْعَمْتَ / لَمْ يَلِدْ), biarkan tetap Sukun!
      */
-    private fun injectHeavyAlloohPhonetics(input: String): String {
+    private fun preserveIqroFullEndingVowels(phrase: String): String {
+        val words = phrase.split(Regex("\\s+")).toMutableList()
+        if (words.isEmpty()) return phrase
+
+        var lastWord = words.last()
+
+        when {
+            // 1. Jika diakhiri Fathatain + Alif (ـًا atau ًا, contoh: كِتَابًا / كُفُوًا) -> Baca "-an" jelas!
+            lastWord.endsWith("\u064B\u0627") || lastWord.endsWith("\u0627\u064B") -> {
+                lastWord = lastWord.dropLast(2) + "\u064Eنْ"
+            }
+            // 2. Jika diakhiri Fathatain + Alif Maqshurah (ـًى, contoh: هُدًى) -> Baca "-an" jelas!
+            lastWord.endsWith("\u064B\u0649") || lastWord.endsWith("\u0649\u064B") -> {
+                lastWord = lastWord.dropLast(2) + "\u064Eنْ"
+            }
+            // 3. Jika diakhiri Fathatain biasa (ـً, contoh: جَنَّةً) -> Baca "-an"
+            lastWord.endsWith("\u064B") -> {
+                lastWord = lastWord.dropLast(1) + "\u064Eنْ"
+            }
+            // 4. Jika diakhiri Dhammatain (ـٌ, contoh: أَحَدٌ / عَلِيمٌ / جَنَّةٌ) -> Baca "-un" jelas!
+            lastWord.endsWith("\u064C") -> {
+                lastWord = lastWord.dropLast(1) + "\u064Fنْ"
+            }
+            // 5. Jika diakhiri Kasratain (ـٍ, contoh: حَكِيمٍ / عَمَدٍ) -> Baca "-in" jelas!
+            lastWord.endsWith("\u064D") -> {
+                lastWord = lastWord.dropLast(1) + "\u0650نْ"
+            }
+            // 6. Jika diakhiri Fathah (ـَ), Dhammah (ـُ), atau Kasrah (ـِ) pendek (contoh: كَتَبَ / يَقُولُ / بِسْمِ اللَّهِ)
+            // Tambahkan Ha السكت halus (هْ) agar TTS wajib menyuarakan vokal terakhir tersebut dan tidak mematikannya!
+            lastWord.endsWith("\u064E") || lastWord.endsWith("\u064F") || lastWord.endsWith("\u0650") -> {
+                // Jika huruf terakhir adalah Ta Marbuthah berharakat (ةَ / ةُ / ةِ), ubah ke تَ / تُ / تِ agar berbunyi Ta/Tu/Ti
+                if (lastWord.length >= 2 && lastWord[lastWord.length - 2] == 'ة') {
+                    val harakat = lastWord.last()
+                    lastWord = lastWord.dropLast(2) + "ت" + harakat + "هْ"
+                } else {
+                    lastWord += "هْ"
+                }
+            }
+            // 7. Jika diakhiri Sukun (ـْ) atau huruf Mad (ا / و / ي / ى), biarkan apa adanya!
+        }
+
+        words[words.lastIndex] = lastWord
+        return words.joinToString(" ")
+    }
+
+    private fun injectHeavyAulloohPhonetics(input: String, isIqroMode: Boolean = false): String {
         var s = input
 
-        // Kamus Fonetik Dzikir Tasbih & Doa:
-        // Menggunakan ejaan fonetik khusus TTS Arab agar keluar bunyi bulat "Allooh" & mati di ujung waqaf!
-        val exactPhoneticOverrides = mapOf(
-            // 1. Subhaanallooh
-            "سُبْحَانَ اللَّهِ" to "سُبْحَانَ اللَّوْهْ",
-            "سُبْحَانَ اللَّهْ" to "سُبْحَانَ اللَّوْهْ",
-            "سُبْحَانَ الله" to "سُبْحَانَ اللَّوْهْ",
-            // 2. Subhaanalloohi wa bihamdih (Mati di huruf Ha!)
-            "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ" to "سُبْحَانَ اللَّوْهِ وَبِحَمْدِهْ",
-            "سُبْحَانَ اللَّهِ وَبِحَمْدِهْ" to "سُبْحَانَ اللَّوْهِ وَبِحَمْدِهْ",
-            // 3. Subhaanalloohil 'Azhiim (Mati di huruf Mim!)
-            "سُبْحَانَ اللَّهِ الْعَظِيمِ" to "سُبْحَانَ اللَّوْهِ الْعَظِييمْ",
-            "سُبْحَانَ اللَّهِ الْعَظِيمْ" to "سُبْحَانَ اللَّوْهِ الْعَظِييمْ",
-            // 4. Astaghfirulloohal 'Azhiim (Dibaca Astaghfirullooh, bukan Astaghfirullah!)
-            "أَسْتَغْفِرُ اللَّهَ الْعَظِيمَ" to "أَسْتَغْفِرُ اللَّوْهَ الْعَظِييمْ",
-            "أَسْتَغْفِرُ اللَّهَ الْعَظِيمْ" to "أَسْتَغْفِرُ اللَّوْهَ الْعَظِييمْ",
-            "أَسْتَغْفِرُ اللَّهَ" to "أَسْتَغْفِرُ اللَّوْهْ",
-            "أَسْتَغْفِرُ اللَّهْ" to "أَسْتَغْفِرُ اللَّوْهْ",
-            // 5. Alloohu Akbar
-            "اللَّهُ أَكْبَرُ" to "أَللَّوْهُ أَكْبَرْ",
-            "اللَّهُ أَكْبَرْ" to "أَللَّوْهُ أَكْبَرْ",
-            "وَاللَّهُ أَكْبَرُ" to "وَاللَّوْهُ أَكْبَرْ",
-            "وَاللَّهُ أَكْبَرْ" to "وَاللَّوْهُ أَكْبَرْ",
-            // 6. Laa ilaaha illallooh
-            "لَا إِلَٰهَ إِلَّا اللَّهُ" to "لَاا إِلَاهَ إِلَّا اللَّوْهْ",
-            "لَا إِلَٰهَ إِلَّا اللَّهْ" to "لَاا إِلَاهَ إِلَّا اللَّوْهْ",
-            "وَلَا إِلَٰهَ إِلَّا اللَّهُ" to "وَلَاا إِلَاهَ إِلَّا اللَّوْهْ",
-            "وَلَا إِلَٰهَ إِلَّا اللَّهْ" to "وَلَاا إِلَاهَ إِلَّا اللَّوْهْ",
-            // 7. Laa haula wa laa quwwata illaa billaah (Kasrah = tipis billaah)
-            "لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ" to "لَاا حَوْلَ وَلَاا قُوَّةَ إِلَّا بِاللَّاهْ",
-            "لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهْ" to "لَاا حَوْلَ وَلَاا قُوَّةَ إِلَّا بِاللَّاهْ",
-            // 8. Hasbunalloohu wa ni'mal wakiil
-            "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ" to "حَسْبُنَا اللَّوْهُ وَنِعْمَ الْوَكِييلْ",
-            "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلْ" to "حَسْبُنَا اللَّوْهُ وَنِعْمَ الْوَكِييلْ",
-            // 9. Alhamdulillaah (Kasrah = tipis lillaah, mati di ujung)
+        for ((orig, repl) in ServerAudioAndFeatureConfig.customPhoneticMap) {
+            if (s.contains(orig)) {
+                s = s.replace(orig, repl)
+            }
+        }
+
+        if (isIqroMode) {
+            // Pada Mode Iqro, jaga harakat akhir Lafadz Allah tetap hidup sesuai tulisannya!
+            s = s.replace("مِنَ اللَّهِهْ", "مِنَوْللَّوْهِهْ")
+            s = s.replace("رَسُولُ اللَّهِهْ", "رَسُولُوْللَّوْهِهْ")
+            s = s.replace("هُوَ اللَّهُهْ", "هُوَوْللَّوْهُهْ")
+            s = s.replace("اللَّهُهْ", "أَوْللَّوْهُهْ")
+            return s
+        }
+
+        val exactAulloohOverrides = mapOf(
+            "اللَّهُ أَكْبَرُ" to "أَوْللَّوْهُ أَكْبَرْ",
+            "اللَّهُ أَكْبَرْ" to "أَوْللَّوْهُ أَكْبَرْ",
+            "وَاللَّهُ أَكْبَرُ" to "وَاَوْللَّوْهُ أَكْبَرْ",
+            "وَاللَّهُ أَكْبَرْ" to "وَاَوْللَّوْهُ أَكْبَرْ",
+            "سُبْحَانَ اللَّهِ" to "سُبْحَانَوْللَّوْهْ",
+            "سُبْحَانَ اللَّهْ" to "سُبْحَانَوْللَّوْهْ",
+            "سُبْحَانَ الله" to "سُبْحَانَوْللَّوْهْ",
+            "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ" to "سُبْحَانَوْللَّوْهِ وَبِحَمْدِهْ",
+            "سُبْحَانَ اللَّهِ وَبِحَمْدِهْ" to "سُبْحَانَوْللَّوْهِ وَبِحَمْدِهْ",
+            "سُبْحَانَ اللَّهِ الْعَظِيمِ" to "سُبْحَانَوْللَّوْهِ الْعَظِييمْ",
+            "سُبْحَانَ اللَّهِ الْعَظِيمْ" to "سُبْحَانَوْللَّوْهِ الْعَظِييمْ",
+            "لَا إِلَٰهَ إِلَّا اللَّهُ" to "لَاا إِلَاهَ إِلَّاوْللَّوْهْ",
+            "لَا إِلَٰهَ إِلَّا اللَّهْ" to "لَاا إِلَاهَ إِلَّاوْللَّوْهْ",
+            "وَلَا إِلَٰهَ إِلَّا اللَّهُ" to "وَلَاا إِلَاهَ إِلَّاوْللَّوْهْ",
+            "وَلَا إِلَٰهَ إِلَّا اللَّهْ" to "وَلَاا إِلَاهَ إِلَّاوْللَّوْهْ",
+            "أَسْتَغْفِرُ اللَّهَ الْعَظِيمَ" to "أَسْتَغْفِرُوْللَّوْهَ الْعَظِييمْ",
+            "أَسْتَغْفِرُ اللَّهَ الْعَظِيمْ" to "أَسْتَغْفِرُوْللَّوْهَ الْعَظِييمْ",
+            "أَسْتَغْفِرُ اللَّهَ" to "أَسْتَغْفِرُوْللَّوْهْ",
+            "أَسْتَغْفِرُ اللَّهْ" to "أَسْتَغْفِرُوْللَّوْهْ",
+            "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ" to "حَسْبُنَاوْللَّوْهُ وَنِعْمَ الْوَكِييلْ",
+            "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلْ" to "حَسْبُنَاوْللَّوْهُ وَنِعْمَ الْوَكِييلْ",
             "الْحَمْدُ لِلَّهِ" to "الْحَمْدُ لِلَّاهْ",
             "الْحَمْدُ لِلَّهْ" to "الْحَمْدُ لِلَّاهْ",
             "وَالْحَمْدُ لِلَّهِ" to "وَالْحَمْدُ لِلَّاهْ",
-            "وَالْحَمْدُ لِلَّهْ" to "وَالْحَمْدُ لِلَّاهْ"
+            "وَالْحَمْدُ لِلَّهْ" to "وَالْحَمْدُ لِلَّاهْ",
+            "لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ" to "لَاا حَوْلَ وَلَاا قُوَّةَ إِلَّا بِاللَّاهْ",
+            "لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهْ" to "لَاا حَوْلَ وَلَاا قُوَّةَ إِلَّا بِاللَّاهْ"
         )
 
-        if (exactPhoneticOverrides.containsKey(s)) {
-            return exactPhoneticOverrides[s]!!
+        if (exactAulloohOverrides.containsKey(s)) {
+            return exactAulloohOverrides[s]!!
         }
 
-        // Aturan Umum di Dalam Kalimat Panjang:
-        // Jika اللَّه didahului Fathah atau Dhammah, ubah ke fonetik bulat اللَّوْه
-        s = s.replace("سُبْحَانَ اللَّهِ", "سُبْحَانَ اللَّوْهِ")
-        s = s.replace("أَسْتَغْفِرُ اللَّهَ", "أَسْتَغْفِرُ اللَّوْهَ")
-        s = s.replace("اللَّهُمَّ", "أَللَّوْهُمَّ")
-        s = s.replace("إِنْ شَاءَ اللَّهُ", "إِنْ شَاااءَ اللَّوْهْ")
-        s = s.replace("إِنْ شَاءَ اللَّهْ", "إِنْ شَاااءَ اللَّوْهْ")
-        s = s.replace("رَسُولُ اللَّهِ", "رَسُولُ اللَّوْهْ")
-        s = s.replace("رَسُولُ اللَّهْ", "رَسُولُ اللَّوْهْ")
-        s = s.replace("عَلَى اللَّهِ", "عَلَى اللَّوْهْ")
-        s = s.replace("عَلَى اللَّهْ", "عَلَى اللَّوْهْ")
-        s = s.replace("هُوَ اللَّهُ", "هُوَ اللَّوْهُ")
-        s = s.replace("اللَّهُ الصَّمَدُ", "أَللَّوْهُ الصَّمَدْ")
-        s = s.replace("اللَّهُ الصَّمَدْ", "أَللَّوْهُ الصَّمَدْ")
-
-        // Pastikan kata وَبِحَمْدِهِ di mana saja selalu mati Ha-nya ("wa bihamdih")
+        s = s.replace("سُبْحَانَ اللَّهِ", "سُبْحَانَوْللَّوْهِ")
+        s = s.replace("أَسْتَغْفِرُ اللَّهَ", "أَسْتَغْفِرُوْللَّوْهَ")
+        s = s.replace("إِلَّا اللَّهُ", "إِلَّاوْللَّوْهْ")
+        s = s.replace("إِلَّا اللَّهْ", "إِلَّاوْللَّوْهْ")
+        s = s.replace("اللَّهُمَّ", "أَوْللَّوْهُمَّ")
+        s = s.replace("إِنْ شَاءَ اللَّهُ", "إِنْ شَاااءَوْللَّوْهْ")
+        s = s.replace("إِنْ شَاءَ اللَّهْ", "إِنْ شَاااءَوْللَّوْهْ")
+        s = s.replace("مَا شَاءَ اللَّهُ", "مَا شَاااءَوْللَّوْهْ")
+        s = s.replace("رَسُولُ اللَّهِ", "رَسُولُوْللَّوْهْ")
+        s = s.replace("رَسُولُ اللَّهْ", "رَسُولُوْللَّوْهْ")
+        s = s.replace("عَلَى اللَّهِ", "عَلَوْللَّوْهْ")
+        s = s.replace("عَلَى اللَّهْ", "عَلَوْللَّوْهْ")
+        s = s.replace("هُوَ اللَّهُ", "هُوَوْللَّوْهُ")
+        s = s.replace("اللَّهُ الصَّمَدُ", "أَوْللَّوْهُ الصَّمَدْ")
+        s = s.replace("اللَّهُ الصَّمَدْ", "أَوْللَّوْهُ الصَّمَدْ")
         s = s.replace("وَبِحَمْدِهِ", "وَبِحَمْدِهْ")
 
         return s
     }
 
-    /**
-     * Menghapus total harakat hidup (-u, -a, -i, -un, -in) pada huruf paling ujung
-     * dari setiap potongan Waqaf dan menguncinya dengan Sukun (ـْ), sehingga TTS
-     * tidak mungkin lagi membacanya hidup!
-     */
     private fun forceKillLastVowelForWaqaf(phrase: String): String {
         val words = phrase.split(Regex("\\s+")).toMutableList()
         if (words.isEmpty()) return phrase
 
         var lastWord = words.last()
 
-        // 1. Jika kata terakhir adalah Lafadz Allah (اللَّهِ / اللَّهُ / اللَّهَ), matikan menjadi اللَّهْ
         if (lastWord.endsWith("اللَّهِ") || lastWord.endsWith("اللَّهُ") || lastWord.endsWith("اللَّهَ")) {
             lastWord = lastWord.dropLast(1) + "\u0652"
             words[words.lastIndex] = lastWord
             return words.joinToString(" ")
         }
 
-        // 2. Aturan Waqaf Mad 'Iwadh: Fathatain + Alif (ـًا) di akhir kata dibaca panjang 2 harakat (ـَاا)
         if (lastWord.endsWith("\u064B\u0627") || lastWord.endsWith("\u0627\u064B")) {
             lastWord = lastWord.dropLast(2) + "\u064Eاا"
             words[words.lastIndex] = lastWord
             return words.joinToString(" ")
         }
 
-        // 3. Kupas semua harakat vokal di ujung kata (Fathah \u064E, Dhammah \u064F, Kasrah \u0650, Tanwin \u064B-\u064D, Sukun \u0652)
-        // TANPA menghapus Tasydid (\u0651)
         val strippedLast = lastWord.replace(Regex("[\u064B-\u0650\u0652\u0670]+$"), "")
 
-        // 4. Aturan Waqaf Ta Marbuthah (ة): Semua 'ة' di akhir waqaf berubah menjadi Ha Sukun (هْ)
         if (strippedLast.endsWith("ة") || strippedLast.endsWith("ۀ")) {
             lastWord = strippedLast.dropLast(1) + "هْ"
             words[words.lastIndex] = lastWord
             return words.joinToString(" ")
         }
 
-        // 5. Jika berakhir dengan huruf Mad (Alif ا / Alif Maqshurah ى), biarkan panjang
         if (strippedLast.endsWith("ا") || strippedLast.endsWith("ى")) {
             words[words.lastIndex] = strippedLast
             return words.joinToString(" ")
         }
 
-        // 6. Jika sebelum huruf terakhir adalah Ya/Wawu Mad (contoh: الْعَظِيمِ / الْوَكِيلُ / الرَّحِيمِ),
-        // gandakan huruf Mad-nya (الْعَظِييمْ) agar TTS membaca Mad Aridh Lissukun 2-4 harakat lalu berhenti MATI di huruf terakhir!
         lastWord = if (strippedLast.length >= 3) {
             val lastChar = strippedLast.last()
             val prevChar = strippedLast[strippedLast.length - 2]

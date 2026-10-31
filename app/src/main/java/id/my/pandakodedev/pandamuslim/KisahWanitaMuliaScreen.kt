@@ -1,6 +1,6 @@
 package id.my.pandakodedev.pandamuslim
 
-import android.os.Build
+import android.media.MediaPlayer
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,8 +25,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
-import java.util.Locale
 
 data class NobleWomanStory(
     val id: Int,
@@ -43,74 +41,82 @@ data class NobleWomanStory(
 @Composable
 fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val stories = remember { getNobleWomenStoriesList() }
+    var stories by remember { mutableStateOf(getNobleWomenStoriesList()) }
+    LaunchedEffect(Unit) {
+        val webItems = fetchContentsFromServer("wanita")
+        if (webItems.isNotEmpty()) {
+            val mappedWeb = webItems.map { w ->
+                NobleWomanStory(
+                    id = w.id,
+                    name = w.title,
+                    arabicName = w.arabicText.ifBlank { "رَضِيَ اللَّهُ عَنْهَا" },
+                    titleHonor = w.latinText.ifBlank { "Tokoh Wanita Mulia" },
+                    emoji = "🧕",
+                    duaArabic = w.arabicText,
+                    storyParagraphs = w.description,
+                    moralLesson = "Teladani keimanan, kesabaran, dan kemuliaan adab beliau dalam kehidupan sehari-hari."
+                )
+            }
+            stories = mappedWeb + getNobleWomenStoriesList()
+        }
+    }
 
     var selectedWoman by remember { mutableStateOf<NobleWomanStory?>(null) }
+    var selectedVoiceStyle by remember { mutableStateOf(StorytellerVoiceStyle.KAKAK_LEMBUT) }
+
     var isStorytelling by remember { mutableStateOf(false) }
     var activeSentenceIdx by remember { mutableStateOf(-1) }
     var sentencesList by remember { mutableStateOf<List<String>>(emptyList()) }
 
+    val mediaPlayer = remember { MediaPlayer() }
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
 
     DisposableEffect(context) {
         var tts: TextToSpeech? = null
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale("id", "ID")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    try {
-                        val bestIndo = tts?.voices?.filter {
-                            it.locale.language == "id" || it.locale.language == "in"
-                        }?.maxByOrNull { v ->
-                            val n = v.name.lowercase()
-                            (if (n.contains("network") || n.contains("wavenet") || n.contains("neural")) 50 else 0) + v.quality
-                        }
-                        if (bestIndo != null) tts?.voice = bestIndo
-                    } catch (_: Exception) {}
+                tts?.let { safeTts ->
+                    IndonesianStorytellerEngine.configureSoftIndonesianVoice(safeTts, selectedVoiceStyle)
                 }
             }
         }
         ttsEngine = tts
         onDispose {
-            tts?.stop()
+            IndonesianStorytellerEngine.stopStorytelling(tts)
+            try {
+                if (mediaPlayer.isPlaying) mediaPlayer.stop()
+                mediaPlayer.release()
+            } catch (_: Exception) {}
             tts?.shutdown()
         }
     }
 
-    LaunchedEffect(isStorytelling, selectedWoman) {
-        val woman = selectedWoman
-        if (!isStorytelling || woman == null) return@LaunchedEffect
-
-        val fullText = "Kisah Teladan ${woman.name}, ${woman.titleHonor}. ${woman.storyParagraphs}. Hikmah teladan: ${woman.moralLesson}"
-        val sents = fullText
-            .replace("\n", ". ")
-            .split(Regex("(?<=[.!?])\\s+"))
-            .map { it.trim() }
-            .filter { it.length > 2 }
-
+    fun startOrRestartStory(woman: NobleWomanStory, style: StorytellerVoiceStyle = selectedVoiceStyle) {
+        val fullStoryBody = "${woman.storyParagraphs}. Hikmah teladan untuk kita: ${woman.moralLesson}"
+        val sents = IndonesianStorytellerEngine.splitIntoNaturalSentences(
+            rawTitle = "Kisah Teladan ${woman.name}, ${woman.titleHonor}",
+            rawBody = fullStoryBody
+        )
         sentencesList = sents
+        isStorytelling = true
+        activeSentenceIdx = 0
 
-        for (i in sents.indices) {
-            if (!isStorytelling) break
-            activeSentenceIdx = i
-            val s = sents[i]
-            ttsEngine?.let { tts ->
-                tts.language = Locale("id", "ID")
-                val pitch = when {
-                    i == 0 -> 1.08f
-                    s.endsWith("!") -> 1.12f
-                    i % 2 == 0 -> 1.04f
-                    else -> 0.99f
-                }
-                tts.setPitch(pitch)
-                tts.setSpeechRate(0.91f)
-                tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, "woman_story_$i")
+        IndonesianStorytellerEngine.startExpressiveStorytelling(
+            tts = ttsEngine,
+            sentences = sents,
+            style = style,
+            onSentenceHighlight = { idx -> activeSentenceIdx = idx },
+            onFinished = {
+                isStorytelling = false
+                activeSentenceIdx = -1
             }
-            val words = s.split(" ").size
-            delay((words * 400L).coerceAtLeast(1600L) + 400L)
-        }
+        )
+    }
+
+    fun stopStoryAudio() {
         isStorytelling = false
         activeSentenceIdx = -1
+        IndonesianStorytellerEngine.stopStorytelling(ttsEngine)
     }
 
     Scaffold(
@@ -125,7 +131,7 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                             fontSize = 17.sp
                         )
                         Text(
-                            text = selectedWoman?.titleHonor ?: "Ibu Para Nabi, Penghuni Surga & Pejuang Iman",
+                            text = selectedWoman?.titleHonor ?: "Suara Pendongeng Lembut & Penuh Hikmah 🌸",
                             color = GoldAccent,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -134,8 +140,7 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        isStorytelling = false
-                        ttsEngine?.stop()
+                        stopStoryAudio()
                         if (selectedWoman != null) selectedWoman = null else onBack()
                     }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Kembali", tint = Color.White)
@@ -209,6 +214,7 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // Panel Studio Suara Pendongeng Lembut
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = EmeraldDark),
@@ -216,20 +222,48 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(w.arabicName, fontSize = 28.sp, fontWeight = FontWeight.Black, color = GoldAccent)
-                        Text(w.name, fontSize = 20.sp, fontWeight = FontWeight.Black, color = Color.White)
-                        Text(w.titleHonor, fontSize = 12.sp, color = MintSurface)
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(w.name, fontSize = 19.sp, fontWeight = FontWeight.Black, color = Color.White, textAlign = TextAlign.Center)
+                        Text(w.titleHonor, fontSize = 12.sp, color = MintSurface, textAlign = TextAlign.Center)
+
+                        // Pilihan 3 Karakter Suara Pendongeng
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            StorytellerVoiceStyle.values().forEach { style ->
+                                val active = selectedVoiceStyle == style
+                                Surface(
+                                    color = if (active) GoldAccent else Color.White.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            selectedVoiceStyle = style
+                                            if (isStorytelling) {
+                                                startOrRestartStory(w, style)
+                                            }
+                                        }
+                                ) {
+                                    Text(
+                                        text = style.label,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = if (active) Color(0xFF0F172A) else Color.White,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         Button(
                             onClick = {
-                                if (isStorytelling) {
-                                    isStorytelling = false
-                                    ttsEngine?.stop()
-                                } else {
-                                    isStorytelling = true
-                                }
+                                if (isStorytelling) stopStoryAudio()
+                                else startOrRestartStory(w, selectedVoiceStyle)
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isStorytelling) Color(0xFFE11D48) else GoldAccent
@@ -244,14 +278,16 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (isStorytelling) "⏹️ Hentikan Suara Pendongeng" else "🔊 Dengarkan Kisah Berirama",
+                                text = if (isStorytelling) "⏹️ Hentikan Suara Pendongeng" else "🔊 Dengarkan Kisah (Suara Lembut Natural)",
                                 color = if (isStorytelling) Color.White else Color(0xFF0F172A),
-                                fontWeight = FontWeight.Black
+                                fontWeight = FontWeight.Black,
+                                fontSize = 12.sp
                             )
                         }
                     }
                 }
 
+                // Kotak Doa / Ayat Kemuliaan (Dilengkapi Tombol Suara Arab Fasih!)
                 if (w.duaArabic.isNotBlank()) {
                     Card(
                         shape = RoundedCornerShape(20.dp),
@@ -264,13 +300,48 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                             modifier = Modifier.padding(16.dp).fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("✨ Doa / Ayat Kemuliaan Beliau:", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF92400E))
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(w.duaArabic, fontSize = 25.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, color = EmeraldDark, textAlign = TextAlign.Center)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("✨ Doa / Ayat Kemuliaan Beliau:", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF92400E))
+                                Surface(
+                                    color = GoldAccent,
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier.clickable {
+                                        stopStoryAudio()
+                                        ArabicWaqafPhoneticEngine.speakAuthenticArabic(
+                                            arabicText = w.duaArabic,
+                                            tts = ttsEngine,
+                                            mediaPlayer = mediaPlayer
+                                        )
+                                    }
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Dengar Doa", fontSize = 10.sp, fontWeight = FontWeight.Black, color = Color(0xFF0F172A))
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = w.duaArabic,
+                                fontSize = 25.sp,
+                                lineHeight = 42.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldDark,
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
 
+                // Isi Cerita (Menyorot Kalimat Demi Kalimat Tanpa Patah-Patah!)
                 Card(
                     shape = RoundedCornerShape(22.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -278,25 +349,45 @@ fun KisahWanitaMuliaScreen(onBack: () -> Unit) {
                 ) {
                     Column(modifier = Modifier.padding(18.dp)) {
                         if (isStorytelling && sentencesList.isNotEmpty()) {
+                            Text(
+                                text = "💡 Ketuk kalimat mana saja untuk langsung melompat ke bagian tersebut:",
+                                fontSize = 11.sp,
+                                color = EmeraldPrimary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
                             sentencesList.forEachIndexed { idx, s ->
                                 val active = (idx == activeSentenceIdx)
                                 Surface(
                                     color = if (active) Color(0xFFFEF08A) else Color.Transparent,
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            IndonesianStorytellerEngine.startExpressiveStorytelling(
+                                                tts = ttsEngine,
+                                                sentences = sentencesList.drop(idx),
+                                                style = selectedVoiceStyle,
+                                                onSentenceHighlight = { subIdx -> activeSentenceIdx = idx + subIdx },
+                                                onFinished = {
+                                                    isStorytelling = false
+                                                    activeSentenceIdx = -1
+                                                }
+                                            )
+                                        }
                                 ) {
                                     Text(
                                         text = s,
                                         fontSize = 15.sp,
                                         lineHeight = 24.sp,
                                         fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Normal,
-                                        color = EmeraldDark,
-                                        modifier = Modifier.padding(6.dp)
+                                        color = if (active) EmeraldDark else Color(0xFF334155),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                                     )
                                 }
                             }
                         } else {
-                            Text(w.storyParagraphs, fontSize = 15.sp, lineHeight = 24.sp, color = Color(0xFF1E293B))
+                            Text(w.storyParagraphs, fontSize = 15.sp, lineHeight = 25.sp, color = Color(0xFF1E293B))
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
@@ -318,37 +409,37 @@ fun getNobleWomenStoriesList(): List<NobleWomanStory> = listOf(
     NobleWomanStory(
         1, "Siti Khadijah binti Khuwailid RA", "خَدِيجَة بِنْت خُوَيْلِد", "Ummul Mukminin & Wanita Pertama Beriman", "👑",
         "إِنَّ اللَّهَ يُبَشِّرُكِ بِبَيْتٍ فِي الْجَنَّةِ مِنْ قَصَبٍ",
-        "Siti Khadijah adalah istri pertama Rasulullah SAW yang sangat mulia, dermawan, dan cerdas. Ketika wahyu pertama turun di Gua Hira dan Rasulullah pulang dalam keadaan gemetar, Khadijah adalah orang pertama yang menenangkan, menyelimuti, dan membenarkan kenabian beliau. Seluruh harta kekayaannya disedekahkan untuk membela dakwah Islam dan membantu fakir miskin. Malaikat Jibril bahkan menyampaikan salam langsung dari Allah SWT untuk Khadijah dan memberi kabar gembira tentang sebuah istana mutiara di Surga yang tiada kebisingan maupun kelelahan di dalamnya!",
-        "Jadilah pribadi yang setia mendukung kebaikan, dermawan menolong sesama, dan menenangkan hati keluarga."
+        "Pada suatu hari di kota Makkah, hiduplah seorang wanita bangsawan yang sangat mulia, jujur, dan dermawan bernama Siti Khadijah. Beliau adalah istri tercinta Rasulullah SAW dan manusia pertama di muka bumi yang beriman kepada ajaran Islam. Ketika wahyu pertama turun di Gua Hira dan Rasulullah pulang dalam keadaan gemetar, Khadijah dengan penuh kelembutan menyelimuti dan menenangkan hati beliau. Seluruh harta kekayaannya disedekahkan untuk membela dakwah dan menolong kaum fakir miskin. Karena ketulusannya yang luar biasa, Malaikat Jibril menyampaikan salam langsung dari Allah SWT untuk Siti Khadijah, serta memberi kabar gembira tentang sebuah istana indah dari mutiara di dalam Surga!",
+        "Jadilah pribadi yang lembut tutur katanya, setia mendukung kebaikan, dan dermawan menolong sesama."
     ),
     NobleWomanStory(
         2, "Siti Hajar (Ibunda Nabi Ismail AS)", "هَاجَر عَلَيْهَا السَّلَامُ", "Simbol Tawakkal & Asal Mula Sa'i Air Zamzam", "💧",
         "إِذًا لَا يُضَيِّعُنَا اللَّهُ",
-        "Ketika Nabi Ibrahim AS diperintahkan Allah meninggalkan Siti Hajar dan bayi Ismail di lembah padang pasir Makkah yang tandus, Siti Hajar bertanya: Apakah Allah yang memerintahkan ini? Saat Nabi Ibrahim mengangguk, Siti Hajar berkata dengan iman yang kokoh: Jika demikian, pasti Allah tidak akan menyia-nyiakan kami! Saat perbekalan air habis, beliau tidak duduk diam, melainkan berusaha berlari tujuh kali antara bukit Shafa dan Marwah hingga Allah memancarkan mata air Zamzam yang penuh berkah.",
-        "Tawakkal kepada Allah harus disertai dengan usaha (ikhtiar) yang sungguh-sungguh dan prasangka baik kepada Allah."
+        "Dahulu kala, Nabi Ibrahim AS diperintahkan oleh Allah SWT untuk menempatkan Siti Hajar dan putranya yang masih bayi, Ismail, di lembah padang pasir Makkah yang sunyi. Dengan iman yang sangat teguh, Siti Hajar bertanya: Wahai suamiku, apakah Allah yang memerintahkan hal ini? Ketika Nabi Ibrahim mengangguk, Siti Hajar berkata dengan tenang: Jika demikian, pasti Allah tidak akan pernah menyia-nyiakan kami! Ketika persediaan air habis dan bayi Ismail menangis kehausan, Siti Hajar tidak berputus asa. Beliau berlari kecil tujuh kali antara bukit Shafa dan Marwah sambil berdoa, hingga Allah mengutus Malaikat Jibril dan memancarkan mata air Zamzam yang tidak pernah kering hingga hari ini!",
+        "Keyakinan penuh kepada pertolongan Allah harus selalu disertai dengan usaha yang sungguh-sungguh dan pantang menyerah."
     ),
     NobleWomanStory(
         3, "Siti Asiyah binti Muzahim", "آسِيَة بِنْت مُزَاحِم", "Ratu Mesir yang Memilih Istana di Surga", "🏰",
         "رَبِّ ابْنِ لِي عِنْدَكَ بَيْتًا فِي الْجَنَّةِ",
-        "Siti Asiyah hidup di dalam istana termegah di Mesir sebagai permaisuri Fir'aun. Beliau yang menyelamatkan dan merawat bayi Nabi Musa AS dengan penuh kasih sayang. Meskipun dikelilingi kemewahan dunia, hati Siti Asiyah hanya beriman kepada Allah Yang Maha Esa. Saat Fir'aun menyiksanya agar meninggalkan iman, Siti Asiyah tetap teguh dan berdoa: Ya Tuhanku, bangunkanlah untukku sebuah rumah di sisi-Mu di dalam Surga! Allah pun memperlihatkan istananya di Surga hingga beliau tersenyum bahagia.",
-        "Keimanan dan ketaatan kepada Allah jauh lebih berharga daripada seluruh harta dan kemewahan dunia."
+        "Siti Asiyah adalah permaisuri kerajaan Mesir yang sangat lembut hatinya. Beliau adalah sosok ibu angkat yang menyelamatkan bayi Nabi Musa AS dari peti yang hanyut di sungai Nil. Meskipun hidup di tengah istana yang penuh kemewahan, hati Siti Asiyah tidak pernah silau dengan harta dunia dan hanya menyembah Allah Yang Maha Esa. Ketika Fir'aun memaksanya meninggalkan keimanan, Siti Asiyah tetap teguh mempertahankan tauhidnya sambil berdoa: Ya Tuhanku, bangunkanlah untukku sebuah rumah di sisi-Mu di dalam Surga! Allah pun mengabulkan doanya dan memperlihatkan istana indah miliknya di Surga.",
+        "Keimanan, keteguhan hati, dan ketaatan kepada Allah jauh lebih berharga daripada segala kemewahan dunia."
     ),
     NobleWomanStory(
         4, "Maryam binti Imran", "مَرْيَم بِنْت عِمْرَان", "Wanita Terbaik Penjaga Kesucian & Kehormatan", "🕊️",
         "يَا مَرْيَمُ إِنَّ اللَّهَ اصْطَفَاكِ وَطَهَّرَكِ",
-        "Maryam binti Imran adalah satu-satunya wanita yang namanya diabadikan menjadi nama Surah di dalam Al-Quran (Surah Maryam). Sejak kecil beliau tumbuh dalam ketaatan beribadah di mihrab Baitul Maqdis dan sangat menjaga kehormatan serta kesucian dirinya dari pergaulan buruk. Kemuliaan adab dan kesuciannya membuat Malaikat Jibril menyampaikan bahwa Allah telah memilih dan menyucikannya di atas wanita-wanita seluruh alam, serta mengaruniakan putra mulia Nabi Isa AS.",
-        "Menjaga kesucian diri (iffah), menutup aurat, dan rajin beribadah akan mengangkat derajat seorang muslimah di sisi Allah."
+        "Maryam binti Imran adalah wanita suci yang namanya diabadikan menjadi nama sebuah surah di dalam Al-Quran. Sejak kecil, Maryam tumbuh dalam asuhan Nabi Zakariya AS di Baitul Maqdis. Beliau sangat rajin beribadah, menjaga rasa malu, dan membentengi kehormatan dirinya dari segala pergaulan yang buruk. Setiap kali Nabi Zakariya masuk ke mihrab tempat Maryam beribadah, beliau mendapati hidangan buah-buahan segar karunia dari Allah. Kemuliaan akhlak dan kesucian Maryam menjadikannya wanita teladan sepanjang masa, dan dari rahimnya lahir seorang Nabi mulia yaitu Nabi Isa AS.",
+        "Menjaga kesucian diri, menutup aurat dengan sopan, dan rajin beribadah akan mengangkat kemuliaan seorang muslimah di sisi Allah."
     ),
     NobleWomanStory(
         5, "Fathimah Az-Zahra RA", "فَاطِمَة الزَّهْرَاء", "Putri Tercinta Rasulullah & Pemimpin Wanita Surga", "🌸",
         "فَاطِمَةُ بَضْعَةٌ مِنِّي",
-        "Fathimah Az-Zahra adalah putri bungsu Rasulullah SAW yang paling mirip cara berjalan, cara berbicara, dan akhlaknya dengan sang Ayah. Setiap kali Fathimah datang, Rasulullah berdiri menyambutnya dan mencium keningnya. Beliau hidup sangat sederhana bersama suaminya Ali bin Abi Thalib RA, rajin menggiling gandum dengan tangannya sendiri, namun tetap gemar bersedekah memberikan makanannya kepada orang miskin, anak yatim, dan tawanan meski dirinya sedang berpuasa.",
+        "Fathimah Az-Zahra RA adalah putri bungsu Rasulullah SAW yang paling mirip cara berjalan, cara berbicara, serta kelembutan akhlaknya dengan sang Ayah. Setiap kali Fathimah datang berkunjung, Rasulullah berdiri menyambutnya dengan penuh kasih sayang dan mencium keningnya. Meskipun beliau adalah putri seorang Nabi dan pemimpin umat, Fathimah hidup sangat sederhana, rajin bekerja membantu keluarganya, dan selalu mengutamakan sedekah kepada anak yatim serta orang miskin walaupun dirinya sendiri sedang berpuasa.",
         "Kesederhanaan, rasa malu yang tinggi, dan bakti tulus kepada orang tua adalah mahkota terindah anak sholehah."
     ),
     NobleWomanStory(
-        6, "Aisyah binti Abu Bakar RA", "عَائِشَة بِنْت أَبِي بَكْر", "Ummul Mukminin & Guru Besar Ilmu Hadits", "📚",
+        6, "Aisyah binti Abu Bakar RA", "عَائِشَة بِنْت أَبِي بَكْر", "Ummul Mukminin & Guru Besar Ilmu Pengetahuan", "📚",
         "خُذُوا شَطْرَ دِينِكُمْ عَنْ هَذِهِ الْحُمَيْرَاءِ",
-        "Sayyidatina Aisyah RA dikaruniai kecerdasan dan daya ingat yang luar biasa tajam. Beliau meriwayatkan lebih dari 2.210 hadits Rasulullah SAW dan menjadi tempat bertanya para sahabat senior tentang ilmu Al-Quran, fiqih, waris (faraidh), hingga pengobatan. Hal ini membuktikan bahwa Islam sangat memuliakan perempuan yang gemar menuntut ilmu pengetahuan dan mengajarkannya.",
-        "Anak perempuan maupun laki-laki muslim wajib semangat belajar ilmu agama dan ilmu pengetahuan setinggi mungkin."
+        "Sayyidatina Aisyah RA adalah istri Rasulullah SAW yang dikaruniai kecerdasan luar biasa dan ingatan yang sangat kuat. Beliau menghafal dan meriwayatkan lebih dari dua ribu dua ratus hadits Nabi, serta menjadi guru besar tempat bertanya para sahabat tentang tafsir Al-Quran, hukum fiqih, sastra, hingga ilmu pengobatan. Kisah hidup Aisyah RA mengajarkan kepada kita bahwa agama Islam sangat memuliakan perempuan yang gemar membaca, menuntut ilmu pengetahuan, dan menyebarkan kebaikan.",
+        "Setiap anak muslim dan muslimah wajib bersemangat menuntut ilmu agama dan ilmu pengetahuan setinggi mungkin."
     )
 )

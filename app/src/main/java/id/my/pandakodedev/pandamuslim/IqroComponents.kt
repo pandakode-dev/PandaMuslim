@@ -1,7 +1,6 @@
 package id.my.pandakodedev.pandamuslim
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -64,7 +63,7 @@ fun getJilidCurriculumSummary(jilid: Int): JilidCurriculumSummary {
         2 -> JilidCurriculumSummary(
             2, "Iqro Jilid 2: Huruf Sambung & Mad Thabi'i (Alif)",
             "Target: Mengenali bentuk huruf ketika disambung (awal, tengah, akhir) & bacaan panjang 2 ketukan.",
-            "Bedakan dengan tegas mana huruf pendek (1 ketukan) dan huruf ber-Alif panjang (2 ketukan)."
+            "Semua huruf akhir di Jilid 2 dibaca hidup utuh (Ka-Ta-Ba, bukan Katab!). Bedakan pendek vs panjang."
         )
         3 -> JilidCurriculumSummary(
             3, "Iqro Jilid 3: Baris Kasrah (i), Dhammah (u) & Mad Ya/Wawu",
@@ -74,12 +73,12 @@ fun getJilidCurriculumSummary(jilid: Int): JilidCurriculumSummary {
         4 -> JilidCurriculumSummary(
             4, "Iqro Jilid 4: Tanwin (an-in-un), Sukun & Pantulan Qalqalah",
             "Target: Menguasai bunyi Tanwin, huruf mati (Sukun), dan 5 huruf pantulan Qalqalah (ق ط ب ج د).",
-            "Hati-hati! Huruf Sukun biasa jangan ikut memantul, hanya 5 huruf Qalqalah yang memantul."
+            "Tanwin di Jilid 4 tetap dibaca jelas (-an, -in, -un), dan pantulkan 5 huruf Qalqalah saat sukun."
         )
         5 -> JilidCurriculumSummary(
-            5, "Iqro Jilid 5: Alif Lam, Tasydid, Ghunnah & Lafadz Allah",
-            "Target: Menguasai tekan kuat Tasydid, dengung Ghunnah 2 harakat, dan cara berhenti (Waqaf).",
-            "Setiap bertemu Nun Tasydid (نّ) atau Mim Tasydid (مّ), wajib ditahan dengung 2 harakat!"
+            5, "Iqro Jilid 5: Alif Lam, Tasydid, Ghunnah & Cara Waqaf (۝)",
+            "Target: Menguasai tekan kuat Tasydid, dengung Ghunnah 2 harakat, dan mematikan huruf saat ada tanda ۝.",
+            "Jika ada bulatan ۝ di akhir kata, matikan huruf terakhirnya. Jika tidak ada ۝, baca hidup utuh!"
         )
         else -> JilidCurriculumSummary(
             6, "Iqro Jilid 6: Hukum Tajwid Lengkap (Idgham, Iqlab, Ikhfa)",
@@ -100,7 +99,6 @@ fun IqroTopBarTabs(
     activeSpeakingTitle: String?
 ) {
     Column {
-        // 3 Mode Utama Iqro
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -134,7 +132,6 @@ fun IqroTopBarTabs(
             }
         }
 
-        // Pilihan Jilid 1 s/d 6
         if (iqroTabMode == 0 || iqroTabMode == 1) {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
@@ -173,7 +170,6 @@ fun IqroTopBarTabs(
             }
         }
 
-        // Pilihan Baris Harakat (Khusus Tab 30 Hijaiyah)
         if (iqroTabMode == 2) {
             Row(
                 modifier = Modifier
@@ -232,9 +228,6 @@ fun IqroTopBarTabs(
     }
 }
 
-// =========================================================================
-// HEADER RINGKASAN KURIKULUM JILID (TAMPIL DI ATAS KARTU IQRO)
-// =========================================================================
 @Composable
 fun IqroJilidHeaderBanner(jilid: Int, totalCardsInJilid: Int) {
     val summary = remember(jilid) { getJilidCurriculumSummary(jilid) }
@@ -262,7 +255,7 @@ fun IqroJilidHeaderBanner(jilid: Int, totalCardsInJilid: Int) {
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                     )
                 }
-                Text("🔊 Ketuk Kartu = Suara", fontSize = 10.sp, color = MintSurface, fontWeight = FontWeight.Bold)
+                Text("🔊 Ketuk Kartu = Suara Utuh", fontSize = 10.sp, color = MintSurface, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -296,9 +289,6 @@ fun IqroJilidHeaderBanner(jilid: Int, totalCardsInJilid: Int) {
     }
 }
 
-// =========================================================================
-// MODE 2: GENERATOR LEMBAR LATIHAN BACA IQRO (DASAR vs EVALUASI EBTA)
-// =========================================================================
 @Composable
 fun IqroReadingSheetGeneratorView(
     selectedJilid: Int,
@@ -307,7 +297,7 @@ fun IqroReadingSheetGeneratorView(
 ) {
     var seed by remember { mutableStateOf(1) }
     var showLatinHelper by remember { mutableStateOf(true) }
-    var practiceSubMode by remember { mutableStateOf(0) } // 0 = Latihan Bertahap, 1 = Ujian Evaluasi (EBTA)
+    var practiceSubMode by remember { mutableStateOf(0) }
 
     val summary = remember(selectedJilid) { getJilidCurriculumSummary(selectedJilid) }
     val readingRows = remember(selectedJilid, seed, practiceSubMode) {
@@ -361,7 +351,6 @@ fun IqroReadingSheetGeneratorView(
                         }
                     }
 
-                    // Saklar Mode Latihan Dasar vs Mode Ujian Evaluasi Jilid (EBTA)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -382,7 +371,7 @@ fun IqroReadingSheetGeneratorView(
                                     .weight(1f)
                                     .clickable {
                                         practiceSubMode = modeIdx
-                                        if (modeIdx == 1) showLatinHelper = false // Saat EBTA, sembunyikan latin otomatis!
+                                        if (modeIdx == 1) showLatinHelper = false
                                     }
                             ) {
                                 Text(
@@ -452,7 +441,6 @@ fun IqroReadingSheetGeneratorView(
                             )
                         }
 
-                        // Tombol Putar Suara 1 Baris Penuh
                         Surface(
                             color = Color(0xFFFEF3C7),
                             shape = RoundedCornerShape(50),
@@ -478,7 +466,6 @@ fun IqroReadingSheetGeneratorView(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Kotak-Kotak Kata/Huruf Iqro (Diurutkan dari Kanan ke Kiri)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -556,9 +543,6 @@ fun IqroReadingSheetGeneratorView(
     }
 }
 
-// =========================================================================
-// KARTU VISUAL IQRO BERSUARA (DESAIN RAPI, PROPORSIONAL & JELAS)
-// =========================================================================
 @Composable
 fun IqroVisualSoundCard(
     item: ServerContent,
@@ -591,7 +575,6 @@ fun IqroVisualSoundCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(12.dp)
         ) {
-            // Baris Atas: Nomor Halaman & Tombol Penanda / Zoom
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -642,7 +625,6 @@ fun IqroVisualSoundCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Kotak Kaligrafi Huruf Iqro (Besar & Tajam)
             if (imagePart.isNotBlank()) {
                 NetworkImageLoader(
                     imageUrl = imagePart,
@@ -704,7 +686,6 @@ fun IqroVisualSoundCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Tombol Bunyi & Detail
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()
@@ -883,9 +864,6 @@ fun IqroZoomDialog(
     )
 }
 
-// =========================================================================
-// BANK KATA RAKSASA (150+ KOSAKATA LATIHAN & EVALUASI EBTA IQRO JILID 1-6)
-// =========================================================================
 fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = false): List<List<IqroReadingToken>> {
     val pool: List<IqroReadingToken> = when (jilid) {
         1 -> if (!isExamMode) {
@@ -902,7 +880,6 @@ fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = fal
                 IqroReadingToken("يَ", "Ya")
             )
         } else {
-            // Evaluasi EBTA Jilid 1: 3 Huruf Terpisah yang Mirip Makhrajnya
             listOf(
                 IqroReadingToken("أَ عَ أَ", "A - 'A - A"), IqroReadingToken("حَ هَ خَ", "Ha - Ha - Kho"),
                 IqroReadingToken("ثَ سَ شَ", "Tsa - Sa - Sya"), IqroReadingToken("ذَ زَ ظَ", "Dza - Za - Zho"),
@@ -925,7 +902,6 @@ fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = fal
                 IqroReadingToken("شَكَرَ", "Sya-Ka-Ro"), IqroReadingToken("ضَرَبَ", "Dho-Ro-Ba"), IqroReadingToken("طَبَعَ", "Tho-Ba-'A")
             )
         } else {
-            // Evaluasi EBTA Jilid 2: Membedakan Pendek vs Panjang Mad Alif
             listOf(
                 IqroReadingToken("جَمَعَ", "Ja-Ma-'A"), IqroReadingToken("جَامَعَ", "Jaa-Ma-'A"),
                 IqroReadingToken("فَعَلَ", "Fa-'A-La"), IqroReadingToken("فَاعَلَ", "Faa-'A-La"),
@@ -949,14 +925,13 @@ fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = fal
                 IqroReadingToken("فَتِيلَا", "Fa-Tii-Laa"), IqroReadingToken("بَصِيرَا", "Ba-Shii-Roo"), IqroReadingToken("شَكُورَا", "Sya-Kuu-Roo")
             )
         } else {
-            // Evaluasi EBTA Jilid 3: Kombinasi Mad Alif, Mad Ya, dan Mad Wawu
             listOf(
                 IqroReadingToken("قَالُوا", "Qoo-Luu"), IqroReadingToken("كَانُوا", "Kaa-Nuu"),
-                IqroReadingToken("فِيْهَا", "Fii-Haa"), IqroReadingToken("أُوتِيَ", "Uu-Ti-Ya"),
+                IqroReadingToken("فِيهَا", "Fii-Haa"), IqroReadingToken("أُوتِيَ", "Uu-Ti-Ya"),
                 IqroReadingToken("تُوبُوا", "Tuu-Buu"), IqroReadingToken("يُرِيدُ", "Yu-Rii-Du"),
                 IqroReadingToken("مَقَامِي", "Ma-Qoo-Mii"), IqroReadingToken("عِبَادِي", "'I-Baa-Dii"),
-                IqroReadingToken("يُقِيمُوْنَ", "Yu-Qii-Muuna"), IqroReadingToken("هَارُوْنَ", "Haa-Ruuna"),
-                IqroReadingToken("قَارُوْنَ", "Qoo-Ruuna"), IqroReadingToken("دَاوُودَ", "Daa-Wuuda")
+                IqroReadingToken("يُقِيمُونَ", "Yu-Qii-Muu-Na"), IqroReadingToken("هَارُونَ", "Haa-Ruu-Na"),
+                IqroReadingToken("قَارُونَ", "Qoo-Ruu-Na"), IqroReadingToken("دَاوُودَ", "Daa-Wuu-Da")
             )
         }
 
@@ -972,7 +947,6 @@ fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = fal
                 IqroReadingToken("أَقْرَبُ", "Aq'-rabu"), IqroReadingToken("حَبْلٌ", "Hab'-lun"), IqroReadingToken("أَجْرٌ", "Aj'-run")
             )
         } else {
-            // Evaluasi EBTA Jilid 4: Membedakan Sukun Biasa vs Pantulan Qalqalah
             listOf(
                 IqroReadingToken("مَغْضُوبِ", "Magh-dhuubi"), IqroReadingToken("مَقْطُوعٍ", "Maq'-thuu'in"),
                 IqroReadingToken("تَكْسِبُ", "Taksibu"), IqroReadingToken("يَقْبَلُ", "Yaq'-balu"),
@@ -987,18 +961,18 @@ fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = fal
             listOf(
                 IqroReadingToken("إِنَّ", "In-na"), IqroReadingToken("عَمَّ", "'Am-ma"), IqroReadingToken("جَنَّةٌ", "Jan-natun"),
                 IqroReadingToken("الْحَمْدُ", "Al-Hamdu"), IqroReadingToken("الْقَمَرُ", "Al-Qamaru"), IqroReadingToken("الشَّمْسُ", "Asy-Syamsu"),
-                IqroReadingToken("الرَّحْمَنُ", "Ar-Rahmaanu"), IqroReadingToken("النَّاسِ", "An-Naasi"), IqroReadingToken("اللَّهُ", "Allaahu"),
+                IqroReadingToken("الرَّحْمَنُ", "Ar-Rahmaanu"), IqroReadingToken("النَّاسِ", "An-Naasi"), IqroReadingToken("اللَّهُ", "Aulloohu"),
                 IqroReadingToken("رَبِّ", "Rab-bi"), IqroReadingToken("سُبِّحَ", "Sub-biha"), IqroReadingToken("قُدِّرَ", "Qud-dira"),
                 IqroReadingToken("إِيَّاكَ", "Iy-yaaka"), IqroReadingToken("الصِّرَاطَ", "Ash-Shiraatho"), IqroReadingToken("الضَّالِّينَ", "Adh-Dhool-liina"),
-                IqroReadingToken("بِسْمِ اللَّهِ", "Bismillaahi"), IqroReadingToken("مِنَ اللَّهِ", "Minallaahi"), IqroReadingToken("ثُمَّ", "Tsum-ma"),
+                IqroReadingToken("بِسْمِ اللَّهِ", "Bismillaahi"), IqroReadingToken("مِنَ اللَّهِ", "Minaulloohi"), IqroReadingToken("ثُمَّ", "Tsum-ma"),
                 IqroReadingToken("فَعَّالٌ", "Fa'-'aalun"), IqroReadingToken("كَذَّابٌ", "Kadz-dzaabun"), IqroReadingToken("وَهَّابٌ", "Wah-haabun")
             )
         } else {
-            // Evaluasi EBTA Jilid 5: Latihan Waqaf (Berhenti di Akhir Ayat) & Mad Lazim
+            // Evaluasi EBTA Jilid 5: Dilengkapi simbol ۝ sehingga huruf terakhir dimatikan (Waqaf)
             listOf(
                 IqroReadingToken("الْعَالَمِينَ ۝", "Al-'Aalamiin"), IqroReadingToken("الدِّينِ ۝", "Ad-Diin"),
                 IqroReadingToken("نَسْتَعِينُ ۝", "Nasta'iin"), IqroReadingToken("أَحَدٌ ۝", "Ahad'"),
-                IqroReadingToken("الْفَلَقِ ۝", "Al-Falaq'"), IqroReadingToken("وَاسِقٍ إِذَا وَقَبَ ۝", "Idzaa waqab'"),
+                IqroReadingToken("الْفَلَقِ ۝", "Al-Falaq'"), IqroReadingToken("غَاسِقٍ إِذَا وَقَبَ ۝", "Idzaa waqab'"),
                 IqroReadingToken("ذَاتَ لَهَبٍ ۝", "Dzaata lahab'"), IqroReadingToken("الْحَطَبِ ۝", "Al-Hathab'"),
                 IqroReadingToken("الْكَوْثَرَ ۝", "Al-Kautsar"), IqroReadingToken("وَانْحَرْ ۝", "Wan-har")
             )
@@ -1007,25 +981,24 @@ fun generateIqroReadingRows(jilid: Int, rowCount: Int, isExamMode: Boolean = fal
         else -> if (!isExamMode) {
             listOf(
                 IqroReadingToken("مَنْ يَقُولُ", "May-yaquulu"), IqroReadingToken("مِنْ مَالٍ", "Mim-maalin"),
-                IqroReadingToken("مِنْ بَعْدِ", "Mim-ba'di"), IqroReadingToken("سَمِيعٌ بَصِيرٌ", "Samii'um-bashiir"),
+                IqroReadingToken("مِنْ بَعْدِ", "Mim-ba'di"), IqroReadingToken("سَمِيعٌ بَصِيرٌ", "Samii'um-bashiirun"),
                 IqroReadingToken("مِنْ شَرِّ", "Min-syarri"), IqroReadingToken("أَنْفُسِهِمْ", "An-fusihim"),
-                IqroReadingToken("مِنْ رَبِّهِمْ", "Mir-rabbihim"), IqroReadingToken("غَفُورٌ رَحِيمٌ", "Ghafuurur-rahiim"),
+                IqroReadingToken("مِنْ رَبِّهِمْ", "Mir-rabbihim"), IqroReadingToken("غَفُورٌ رَحِيمٌ", "Ghafuurur-rahiimun"),
                 IqroReadingToken("لَمْ يَلِدْ", "Lam yalid'"), IqroReadingToken("وَلَمْ يُولَدْ", "Wa lam yuulad'"),
                 IqroReadingToken("فَسَبِّحْ", "Fasabbih"), IqroReadingToken("وَاسْتَغْفِرْهُ", "Wastaghfirhu"),
                 IqroReadingToken("فَمَنْ يَعْمَلْ", "Famay-ya'mal"), IqroReadingToken("مِنْ وَالٍ", "Miw-waalin"),
                 IqroReadingToken("لَيُنْبَذَنَّ", "Layumbadzanna"), IqroReadingToken("مَنْصُورًا", "Man-shuuran")
             )
         } else {
-            // Evaluasi EBTA Jilid 6: Potongan Ayat Al-Quran Lengkap Tajwid
             listOf(
-                IqroReadingToken("الم ۝ ذَٰلِكَ الْكِتَابُ", "Alif-Laam-Miim"),
-                IqroReadingToken("يس ۝ وَالْقُرْآنِ الْحَكِيمِ", "Yaa-Siin"),
-                IqroReadingToken("إِنَّا أَعْطَيْنَاكَ الْكَوْثَرَ", "Innaa a'thainaaka"),
-                IqroReadingToken("تَرْمِيهِمْ بِحِجَارَةٍ", "Tarmiihim-bihijaarah"),
-                IqroReadingToken("أَطْعَمَهُمْ مِنْ جُوعٍ", "Ath'amahum-min juu'"),
-                IqroReadingToken("وَآمَنَهُمْ مِنْ خَوْفٍ", "Wa aamanahum-min khauf"),
-                IqroReadingToken("كَلَّا لَيُنْبَذَنَّ فِي الْحُطَمَةِ", "Kallaa layumbadzanna"),
-                IqroReadingToken("فِي عَمَدٍ مُمَدَّدَةٍ", "Fii 'amadim-mumaddadah")
+                IqroReadingToken("الم ۝ ذَٰلِكَ الْكِتَابُ ۝", "Alif-Laam-Miim"),
+                IqroReadingToken("يس ۝ وَالْقُرْآنِ الْحَكِيمِ ۝", "Yaa-Siin"),
+                IqroReadingToken("إِنَّا أَعْطَيْنَاكَ الْكَوْثَرَ ۝", "Innaa a'thainaakal-kautsar"),
+                IqroReadingToken("تَرْمِيهِمْ بِحِجَارَةٍ ۝", "Tarmiihim-bihijaarah"),
+                IqroReadingToken("أَطْعَمَهُمْ مِنْ جُوعٍ ۝", "Ath'amahum-min juu'"),
+                IqroReadingToken("وَآمَنَهُمْ مِنْ خَوْفٍ ۝", "Wa aamanahum-min khauf"),
+                IqroReadingToken("كَلَّا لَيُنْبَذَنَّ فِي الْحُطَمَةِ ۝", "Kallaa layumbadzanna fil-huthamah"),
+                IqroReadingToken("فِي عَمَدٍ مُمَدَّدَةٍ ۝", "Fii 'amadim-mumaddadah")
             )
         }
     }

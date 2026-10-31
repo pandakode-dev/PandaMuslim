@@ -136,51 +136,28 @@ fun KisahNabiScreen(onBack: () -> Unit) {
         val story = selectedStory
         if (!isStorytelling || story == null) return@LaunchedEffect
 
-        // Pecah cerita menjadi kalimat-kalimat agar intonasi hidup & ada jeda napas alami
-        val rawText = "${story.title}. ${story.description}"
-        val sentences = rawText
-            .replace("\n", ". ")
-            .split(Regex("(?<=[.!?])\\s+"))
-            .map { it.trim() }
-            .filter { it.length > 2 }
+        val style = when (speechSpeedMode) {
+            0 -> StorytellerVoiceStyle.USTADZ_TEDUH
+            2 -> StorytellerVoiceStyle.CERIA_EKSPRESIF
+            else -> StorytellerVoiceStyle.KAKAK_LEMBUT
+        }
 
+        val sentences = IndonesianStorytellerEngine.splitIntoNaturalSentences(
+            rawTitle = story.title,
+            rawBody = story.description
+        )
         storySentences = sentences
 
-        val baseRate = when (speechSpeedMode) {
-            0 -> 0.84f // Santai Penuh Penghayatan
-            2 -> 1.02f // Cepat
-            else -> 0.92f // Normal Pendongeng
-        }
-
-        for (i in sentences.indices) {
-            if (!isStorytelling) break
-            activeSentenceIndex = i
-            val sentence = sentences[i]
-
-            ttsEngine?.let { tts ->
-                tts.language = Locale("id", "ID")
-                // Variasikan Pitch (Nada) sesuai konteks kalimat agar terdengar bernada & ekspresif!
-                val dynamicPitch = when {
-                    i == 0 -> 1.08f // Judul dibuka dengan nada ceria hangat
-                    sentence.endsWith("!") -> 1.12f // Kalimat seru/mukjizat lebih bersemangat
-                    sentence.endsWith("?") -> 1.14f // Kalimat tanya naik di ujung
-                    sentence.contains("Allah") || sentence.contains("Berdoa", ignoreCase = true) -> 0.96f // Khusyuk & teduh
-                    i % 2 == 0 -> 1.04f
-                    else -> 0.99f
-                }
-                tts.setPitch(dynamicPitch)
-                tts.setSpeechRate(baseRate)
-                tts.speak(sentence, TextToSpeech.QUEUE_FLUSH, null, "story_sent_$i")
+        IndonesianStorytellerEngine.startExpressiveStorytelling(
+            tts = ttsEngine,
+            sentences = sentences,
+            style = style,
+            onSentenceHighlight = { idx -> activeSentenceIndex = idx },
+            onFinished = {
+                isStorytelling = false
+                activeSentenceIndex = -1
             }
-
-            // Hitung estimasi waktu bicara kalimat + jeda napas pendongeng (450ms)
-            val wordCount = sentence.split(" ").size
-            val speakingTimeMs = (wordCount * 390L / baseRate).toLong().coerceAtLeast(1600L)
-            delay(speakingTimeMs + 420L)
-        }
-
-        isStorytelling = false
-        activeSentenceIndex = -1
+        )
     }
 
     fun playQariAyahInStory(rawMediaUrl: String) {

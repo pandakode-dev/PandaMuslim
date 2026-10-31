@@ -143,6 +143,7 @@ fun PandaMuslimHomeScreen(
 
     LaunchedEffect(Unit) {
         isLoadingBanners = true
+        ServerAudioAndFeatureConfig.syncFromWebServer() // <-- Sinkronkan setting suara & saklar fitur baru dari Web Admin!
         val serverBanners = fetchContentsFromServer("banner")
         bannerSlides = serverBanners.map { b ->
             HomeBannerSlide(
@@ -539,21 +540,40 @@ fun SixNewFeaturesGridSection(
     theme: KidsAppTheme,
     onSelectFeature: (String) -> Unit
 ) {
-    val extraFeatures = remember {
-        listOf(
-            ExtraFeatureCardItem("KisahNabi", R.drawable.ic_menu_kisah_nabi, "Kisah 25 Nabi", "Pilih Nabi & Bab Cerita", Color(0xFFFEF3C7)),
-            ExtraFeatureCardItem("KisahWanita", R.drawable.ic_menu_kisah_nabi, "Wanita Teladan", "Kisah Shahabiyah & Ibu Nabi", Color(0xFFFCE7F3)),
-            ExtraFeatureCardItem("TantanganKebaikan", R.drawable.ic_menu_kalender_hijriah, "Misi Kebaikan", "Tantangan Akhlak Harian", Color(0xFFD1FAE5)),
-            ExtraFeatureCardItem("JurnalSyukur", R.drawable.ic_menu_sertifikat, "Jurnal Syukur", "Buku Harian Syukur & Doa", Color(0xFFFEF9C3)),
-            ExtraFeatureCardItem("TtsIslami", R.drawable.ic_menu_kuis_islami, "TTS & Puzzle", "Teka-Teki Silang Islami", Color(0xFFE0F2FE)),
-            ExtraFeatureCardItem("Imsakiyah", R.drawable.ic_menu_kalender_hijriah, "Imsakiyah & Puasa", "Jadwal Imsak & Puasa Sunnah", Color(0xFFEDE9FE)),
-            ExtraFeatureCardItem("KuisIslami", R.drawable.ic_menu_kuis_islami, "Kuis Pintar", "Game Cerdas Cermat", Color(0xFFD1FAE5)),
-            ExtraFeatureCardItem("KalenderHijriah", R.drawable.ic_menu_kalender_hijriah, "Celengan Amal", "Kalender Hijriah & Bintang", Color(0xFFE0F2FE)),
-            ExtraFeatureCardItem("KamusHalal", R.drawable.ic_menu_kamus_halal, "Kamus Halal", "Cek Bahan & Kode Makanan", Color(0xFFFCE7F3)),
-            ExtraFeatureCardItem("TanyaPanda", R.drawable.ic_menu_tanya_panda, "Tanya Kak Panda", "Chat Tanya Jawab Anak", Color(0xFFEDE9FE)),
-            ExtraFeatureCardItem("PialaSertifikat", R.drawable.ic_menu_sertifikat, "Piala & Piagam", "Cetak Sertifikat Anak Sholeh", Color(0xFFFFEDD5)),
-            ExtraFeatureCardItem("MewarnaiKaligrafi", R.drawable.ic_menu_mewarnai, "Lukis Kaligrafi", "Warnai Masjid & Kaligrafi", Color(0xFFFFE4E6))
-        ).chunked(2)
+    val extraFeatures = remember(
+        ServerAudioAndFeatureConfig.enableKisahWanita,
+        ServerAudioAndFeatureConfig.enableMisiKebaikan,
+        ServerAudioAndFeatureConfig.enableJurnalSyukur,
+        ServerAudioAndFeatureConfig.enableTtsIslami,
+        ServerAudioAndFeatureConfig.enableImsakiyah,
+        ServerAudioAndFeatureConfig.enableLukisKaligrafi
+    ) {
+        buildList {
+            add(ExtraFeatureCardItem("KisahNabi", R.drawable.ic_menu_kisah_nabi, "Kisah 25 Nabi", "Pilih Nabi & Bab Cerita", Color(0xFFFEF3C7)))
+            if (ServerAudioAndFeatureConfig.enableKisahWanita) {
+                add(ExtraFeatureCardItem("KisahWanita", R.drawable.ic_menu_kisah_nabi, "Wanita Teladan", "Kisah Shahabiyah & Ibu Nabi", Color(0xFFFCE7F3)))
+            }
+            if (ServerAudioAndFeatureConfig.enableMisiKebaikan) {
+                add(ExtraFeatureCardItem("TantanganKebaikan", R.drawable.ic_menu_kalender_hijriah, "Misi Kebaikan", "Tantangan Akhlak Harian", Color(0xFFD1FAE5)))
+            }
+            if (ServerAudioAndFeatureConfig.enableJurnalSyukur) {
+                add(ExtraFeatureCardItem("JurnalSyukur", R.drawable.ic_menu_sertifikat, "Jurnal Syukur", "Buku Harian Syukur & Doa", Color(0xFFFEF9C3)))
+            }
+            if (ServerAudioAndFeatureConfig.enableTtsIslami) {
+                add(ExtraFeatureCardItem("TtsIslami", R.drawable.ic_menu_kuis_islami, "TTS & Puzzle", "Teka-Teki Silang Islami", Color(0xFFE0F2FE)))
+            }
+            if (ServerAudioAndFeatureConfig.enableImsakiyah) {
+                add(ExtraFeatureCardItem("Imsakiyah", R.drawable.ic_menu_kalender_hijriah, "Imsakiyah & Puasa", "Jadwal Imsak & Puasa Sunnah", Color(0xFFEDE9FE)))
+            }
+            add(ExtraFeatureCardItem("KuisIslami", R.drawable.ic_menu_kuis_islami, "Kuis Pintar", "Game Cerdas Cermat", Color(0xFFD1FAE5)))
+            add(ExtraFeatureCardItem("KalenderHijriah", R.drawable.ic_menu_kalender_hijriah, "Celengan Amal", "Kalender Hijriah & Bintang", Color(0xFFE0F2FE)))
+            add(ExtraFeatureCardItem("KamusHalal", R.drawable.ic_menu_kamus_halal, "Kamus Halal", "Cek Bahan & Kode Makanan", Color(0xFFFCE7F3)))
+            add(ExtraFeatureCardItem("TanyaPanda", R.drawable.ic_menu_tanya_panda, "Tanya Kak Panda", "Chat Tanya Jawab Anak", Color(0xFFEDE9FE)))
+            add(ExtraFeatureCardItem("PialaSertifikat", R.drawable.ic_menu_sertifikat, "Piala & Piagam", "Cetak Sertifikat Anak Sholeh", Color(0xFFFFEDD5)))
+            if (ServerAudioAndFeatureConfig.enableLukisKaligrafi) {
+                add(ExtraFeatureCardItem("MewarnaiKaligrafi", R.drawable.ic_menu_mewarnai, "Lukis Kaligrafi", "Warnai Masjid & Kaligrafi", Color(0xFFFFE4E6)))
+            }
+        }.chunked(2)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
