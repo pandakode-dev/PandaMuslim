@@ -186,6 +186,12 @@ fun PandaMuslimAppNavigator(
             "TanyaPanda" -> TanyaKakPandaScreen(onBack = { currentScreen = "HOME" })
             "PialaSertifikat" -> PialaSertifikatScreen(onBack = { currentScreen = "HOME" })
             "Imsakiyah" -> ImsakiyahPuasaScreen(onBack = { currentScreen = "HOME" })
+            "TantanganKebaikan" -> TantanganKebaikanScreen(onBack = { currentScreen = "HOME" })
+            "JurnalSyukur" -> JurnalSyukurScreen(onBack = { currentScreen = "HOME" })
+            "KisahWanita" -> KisahWanitaMuliaScreen(onBack = { currentScreen = "HOME" })
+            "TtsIslami" -> TtsPuzzleIslamiScreen(onBack = { currentScreen = "HOME" })
+            "MewarnaiKaligrafi", "Mewarnai" -> GaleriMewarnaiKaligrafiScreen(onBack = { currentScreen = "HOME" })
+            "Imsakiyah" -> ImsakiyahPuasaScreen(onBack = { currentScreen = "HOME" })
 
             else -> {
                 val categoryMap = mapOf(

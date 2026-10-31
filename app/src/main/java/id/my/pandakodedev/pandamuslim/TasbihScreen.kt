@@ -37,7 +37,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import java.util.Locale
 
 data class DzikirOption(
     val id: Int,
@@ -79,15 +78,13 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
 
     val mediaPlayer = remember { MediaPlayer() }
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+
     DisposableEffect(context) {
         var tts: TextToSpeech? = null
         tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                val res = tts?.setLanguage(Locale("ar", "SA"))
-                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    tts?.setLanguage(Locale("ar"))
-                }
-                tts?.setSpeechRate(0.85f)
+            val safeTts = tts
+            if (status == TextToSpeech.SUCCESS && safeTts != null) {
+                ArabicWaqafPhoneticEngine.configureStrictArabicVoice(safeTts, speechRate = 0.65f, pitch = 0.88f)
             }
         }
         ttsEngine = tts
@@ -108,6 +105,7 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
         }
     }
 
+    // Fungsi Suara Dzikir dengan Mesin Waqaf Mati & Lafadz Jalalah Tebal ("Allooh")
     fun speakCurrentDzikir(arabicRaw: String = selectedDzikir.arabic) {
         ArabicWaqafPhoneticEngine.speakAuthenticArabic(
             arabicText = arabicRaw,
@@ -147,7 +145,6 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        try { if (mediaPlayer.isPlaying) mediaPlayer.stop() } catch (_: Exception) {}
                         ttsEngine?.stop()
                         onBack()
                     }) {
@@ -210,7 +207,7 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
                                 .clickable {
                                     selectedDzikir = item
                                     if (isSoundEnabled) {
-                                        ttsEngine?.speak(item.arabic, TextToSpeech.QUEUE_FLUSH, null, "dzikir_select")
+                                        speakCurrentDzikir(item.arabic)
                                     }
                                 }
                         ) {
@@ -394,16 +391,16 @@ fun Tasbih3DScreen(onBack: () -> Unit) {
 }
 
 fun getCompleteDzikirOptions(): List<DzikirOption> = listOf(
-    DzikirOption(1, "Istighfar Agung", "أَسْتَغْفِرُ اللَّهَ الْعَظِيمَ", "Astaghfirullaahal 'Azhiim", "Aku memohon ampun kepada Allah Yang Maha Agung", 33, "Membuka pintu rezeki dan menghapus dosa-dosa harian."),
-    DzikirOption(2, "Tasbih & Tahmid", "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ", "Subhaanallaahi wa bihamdih", "Maha Suci Allah dan segala puji bagi-Nya", 100, "Barangsiapa membacanya 100x sehari, dihapuskan dosanya walau sebanyak buih di lautan. (HR. Bukhari)"),
-    DzikirOption(3, "Tasbih Agung", "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ ، سُبْحَانَ اللَّهِ الْعَظِيمِ", "Subhaanallaahi wa bihamdihi, Subhaanallaahil 'Azhiim", "Maha Suci Allah dan segala puji bagi-Nya, Maha Suci Allah Yang Maha Agung", 33, "Dua kalimat yang ringan di lisan, dicintai Ar-Rahman, dan berat di timbangan amal. (HR. Bukhari & Muslim)"),
-    DzikirOption(4, "Subhanallah", "سُبْحَانَ اللَّهِ", "Subhaanallaah", "Maha Suci Allah", 33, "Dzikir utama bakda sholat fardhu 33 kali."),
+    DzikirOption(1, "Istighfar Agung", "أَسْتَغْفِرُ اللَّهَ الْعَظِيمَ", "Astaghfirulloohal 'Azhiim", "Aku memohon ampun kepada Allah Yang Maha Agung", 33, "Membuka pintu rezeki dan menghapus dosa-dosa harian."),
+    DzikirOption(2, "Tasbih & Tahmid", "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ", "Subhaanalloohi wa bihamdih", "Maha Suci Allah dan segala puji bagi-Nya", 100, "Barangsiapa membacanya 100x sehari, dihapuskan dosanya walau sebanyak buih di lautan. (HR. Bukhari)"),
+    DzikirOption(3, "Tasbih Agung", "سُبْحَانَ اللَّهِ وَبِحَمْدِهِ ، سُبْحَانَ اللَّهِ الْعَظِيمِ", "Subhaanalloohi wa bihamdih, Subhaanalloohil 'Azhiim", "Maha Suci Allah dan segala puji bagi-Nya, Maha Suci Allah Yang Maha Agung", 33, "Dua kalimat yang ringan di lisan, dicintai Ar-Rahman, dan berat di timbangan amal. (HR. Bukhari & Muslim)"),
+    DzikirOption(4, "Subhanallooh", "سُبْحَانَ اللَّهِ", "Subhaanallooh", "Maha Suci Allah", 33, "Dzikir utama bakda sholat fardhu 33 kali."),
     DzikirOption(5, "Alhamdulillah", "الْحَمْدُ لِلَّهِ", "Alhamdulillaah", "Segala puji bagi Allah", 33, "Kalimat syukur yang memenuhi timbangan pahala kebaikan."),
-    DzikirOption(6, "Allahu Akbar", "اللَّهُ أَكْبَرُ", "Allaahu Akbar", "Allah Maha Besar", 33, "Meneguhkan kebesaran Allah di dalam hati."),
-    DzikirOption(7, "Tahlil & Tauhid", "لَا إِلَٰهَ إِلَّا اللَّهُ", "Laa ilaaha illallaah", "Tiada Tuhan yang berhak disembah selain Allah", 100, "Sebaik-baik dzikir adalah Laa ilaaha illallaah. (HR. Tirmidzi)"),
+    DzikirOption(6, "Alloohu Akbar", "اللَّهُ أَكْبَرُ", "Alloohu Akbar", "Allah Maha Besar", 33, "Meneguhkan kebesaran Allah di dalam hati."),
+    DzikirOption(7, "Tahlil & Tauhid", "لَا إِلَٰهَ إِلَّا اللَّهُ", "Laa ilaaha illallooh", "Tiada Tuhan yang berhak disembah selain Allah", 100, "Sebaik-baik dzikir adalah Laa ilaaha illallooh. (HR. Tirmidzi)"),
     DzikirOption(8, "Hauqalah (Harta Surga)", "لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ", "Laa haula wa laa quwwata illaa billaah", "Tiada daya dan upaya kecuali dengan pertolongan Allah", 33, "Salah satu perbendaharaan harta simpanan di Surga. (HR. Bukhari)"),
-    DzikirOption(9, "Sholawat Nabi SAW", "اللَّهُمَّ صَلِّ عَلَى سَيِّدِنَا مُحَمَّدٍ", "Allaahumma shalli 'alaa Sayyidinaa Muhammad", "Ya Allah, limpahkanlah rahmat kepada Nabi kami Muhammad SAW", 100, "Barangsiapa bersholawat 1 kali, Allah bersholawat (memberi rahmat) kepadanya 10 kali. (HR. Muslim)"),
-    DzikirOption(10, "Dzikir Empat Kalimat Mulia", "سُبْحَانَ اللَّهِ ، وَالْحَمْدُ لِلَّهِ ، وَلَا إِلَٰهَ إِلَّا اللَّهُ ، وَاللَّهُ أَكْبَرُ", "Subhaanallaah, walhamdulillaah, wa laa ilaaha illallaah, wallaahu akbar", "Maha Suci Allah, segala puji bagi Allah, tiada Tuhan selain Allah, Allah Maha Besar", 33, "Kalimat yang paling dicintai Allah dan menjadi tanaman pohon di Surga."),
-    DzikirOption(11, "Dzikir Nabi Yunus AS", "لَا إِلَٰهَ إِلَّا أَنْتَ سُبْحَانَكَ إِنِّي كُنْتُ مِنَ الظَّالِمِينَ", "Laa ilaaha illaa Anta subhaanaka innii kuntu minazh-zhaalimiin", "Tiada Tuhan selain Engkau, Maha Suci Engkau, sungguh aku termasuk orang yang zalim", 33, "Doa mustajab pengangkat kesulitan dan kesedihan."),
-    DzikirOption(12, "Hasbunallah Wa Ni'mal Wakil", "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ", "Hasbunallaahu wa ni'mal wakiil", "Cukuplah Allah menjadi Penolong kami dan Allah adalah sebaik-baik Pelindung", 33, "Dzikir keberanian dan tawakkal penuh yang dibaca Nabi Ibrahim AS & Rasulullah SAW.")
+    DzikirOption(9, "Sholawat Nabi SAW", "اللَّهُمَّ صَلِّ عَلَى سَيِّدِنَا مُحَمَّدٍ", "Alloohumma shalli 'alaa Sayyidinaa Muhammad", "Ya Allah, limpahkanlah rahmat kepada Nabi kami Muhammad SAW", 100, "Barangsiapa bersholawat 1 kali, Allah bersholawat (memberi rahmat) kepadanya 10 kali. (HR. Muslim)"),
+    DzikirOption(10, "Dzikir Empat Kalimat Mulia", "سُبْحَانَ اللَّهِ ، وَالْحَمْدُ لِلَّهِ ، وَلَا إِلَٰهَ إِلَّا اللَّهُ ، وَاللَّهُ أَكْبَرُ", "Subhaanallooh, walhamdulillaah, wa laa ilaaha illallooh, walloohu akbar", "Maha Suci Allah, segala puji bagi Allah, tiada Tuhan selain Allah, Allah Maha Besar", 33, "Kalimat yang paling dicintai Allah dan menjadi tanaman pohon di Surga."),
+    DzikirOption(11, "Dzikir Nabi Yunus AS", "لَا إِلَٰهَ إِلَّا أَنْتَ ، سُبْحَانَكَ إِنِّي كُنْتُ مِنَ الظَّالِمِينَ", "Laa ilaaha illaa Anta, subhaanaka innii kuntu minazh-zhaalimiin", "Tiada Tuhan selain Engkau, Maha Suci Engkau, sungguh aku termasuk orang yang zalim", 33, "Doa mustajab pengangkat kesulitan dan kesedihan."),
+    DzikirOption(12, "Hasbunallooh Wa Ni'mal Wakil", "حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ", "Hasbunalloohu wa ni'mal wakiil", "Cukuplah Allah menjadi Penolong kami dan Allah adalah sebaik-baik Pelindung", 33, "Dzikir keberanian dan tawakkal penuh yang dibaca Nabi Ibrahim AS & Rasulullah SAW.")
 )

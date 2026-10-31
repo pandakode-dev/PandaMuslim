@@ -74,7 +74,7 @@ fun ImsakiyahPuasaScreen(onBack: () -> Unit) {
         tts = TextToSpeech(context) { status ->
             val engine = tts
             if (status == TextToSpeech.SUCCESS && engine != null) {
-                ArabicWaqafPhoneticEngine.configureBestArabicVoice(engine, 0.75f)
+                ArabicWaqafPhoneticEngine.configureStrictArabicVoice(engine, speechRate = 0.75f)
             }
         }
         ttsEngine = tts
@@ -106,7 +106,7 @@ fun ImsakiyahPuasaScreen(onBack: () -> Unit) {
             } catch (_: Exception) {}
         }
         ttsEngine?.let { tts ->
-            ArabicWaqafPhoneticEngine.configureBestArabicVoice(tts, 0.74f)
+            ArabicWaqafPhoneticEngine.configureStrictArabicVoice(tts, speechRate = 0.74f)
             val waqafArabic = ArabicWaqafPhoneticEngine.toWaqafRecitationText(arabic)
             tts.speak(waqafArabic, TextToSpeech.QUEUE_FLUSH, null, "puasa_doa")
         }
