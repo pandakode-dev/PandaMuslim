@@ -2,6 +2,8 @@ package id.my.pandakodedev.pandamuslim
 
 import android.content.Context
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -50,12 +52,50 @@ fun applyGlobalThemeColors(theme: KidsAppTheme) {
     OffWhiteBg = theme.bodyBg
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
+
+    private var tts: TextToSpeech? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Pelindung Utama: Mencegah force close global tanpa log
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            Log.e("PandaMuslimCrash", "Terjadi error pada thread ${thread.name}: ${throwable.message}", throwable)
+        }
+
+        try {
+            tts = TextToSpeech(this, this)
+        } catch (e: Exception) {
+            Log.e("PandaMuslimTTS", "Gagal memuat mesin suara: ${e.message}")
+        }
+
         setContent {
             PandaMuslimAppRoot()
         }
+    }
+
+    override fun onInit(status: Int) {
+        try {
+            if (status == TextToSpeech.SUCCESS) {
+                val result = tts?.setLanguage(java.util.Locale("id", "ID"))
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    tts?.setLanguage(java.util.Locale.US)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("PandaMuslimTTS", "Error konfigurasi bahasa: ${e.message}")
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (e: Exception) {
+            Log.e("PandaMuslimTTS", "Error saat menutup TTS: ${e.message}")
+        }
+        super.onDestroy()
     }
 }
 
@@ -105,6 +145,7 @@ fun PandaMuslimAppRoot() {
     CompositionLocalProvider(LocalPandaTheme provides currentTheme) {
         MaterialTheme(colorScheme = dynamicColorScheme) {
             Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.bodyBg) {
+                // Telah dihapus: try-catch yang melanggar aturan Jetpack Compose
                 if (activeUser == null) {
                     MandatoryLoginScreen(
                         onLoginSuccess = { loggedIn ->
@@ -149,6 +190,7 @@ fun PandaMuslimAppNavigator(
     }
 
     Crossfade(targetState = currentScreen, label = "screen_transition") { screen ->
+        // Telah dihapus: try-catch di dalam navigasi
         when (screen) {
             "HOME" -> {
                 PandaMuslimHomeScreen(
@@ -163,11 +205,9 @@ fun PandaMuslimAppNavigator(
                     }
                 )
             }
-            // Navigasi Admin & Donasi
             "AdminPanel" -> AdminMobilePanelScreen(onBack = { currentScreen = "HOME" })
             "Donasi" -> DonasiScreen(onBack = { currentScreen = "HOME" })
 
-            // Navigasi 16 Menu Utama
             "Al-Quran" -> QuranScreen(onBack = { currentScreen = "HOME" })
             "Asmaul" -> AsmaulHusnaScreen(onBack = { currentScreen = "HOME" })
             "Tasbih" -> Tasbih3DScreen(onBack = { currentScreen = "HOME" })
@@ -175,21 +215,19 @@ fun PandaMuslimAppNavigator(
             "Amalan" -> AmalanScreen(onBack = { currentScreen = "HOME" })
             "Kalkulator" -> KalkulatorZakatScreen(onBack = { currentScreen = "HOME" })
             "Khatam" -> KhatamTrackerScreen(onBack = { currentScreen = "HOME" })
-            "Mewarnai" -> MewarnaiScreen(onBack = { currentScreen = "HOME" })
             "Komunitas" -> KomunitasScreen(onBack = { currentScreen = "HOME" })
 
-            // Navigasi 6 Menu Inovatif Baru
             "KisahNabi" -> KisahNabiScreen(onBack = { currentScreen = "HOME" })
             "KuisIslami" -> KuisIslamiScreen(onBack = { currentScreen = "HOME" })
             "KalenderHijriah" -> KalenderHijriahScreen(onBack = { currentScreen = "HOME" })
             "KamusHalal" -> KamusHalalScreen(onBack = { currentScreen = "HOME" })
             "TanyaPanda" -> TanyaKakPandaScreen(onBack = { currentScreen = "HOME" })
             "PialaSertifikat" -> PialaSertifikatScreen(onBack = { currentScreen = "HOME" })
-            "Imsakiyah" -> ImsakiyahPuasaScreen(onBack = { currentScreen = "HOME" })
             "TantanganKebaikan" -> TantanganKebaikanScreen(onBack = { currentScreen = "HOME" })
             "JurnalSyukur" -> JurnalSyukurScreen(onBack = { currentScreen = "HOME" })
             "KisahWanita" -> KisahWanitaMuliaScreen(onBack = { currentScreen = "HOME" })
             "TtsIslami" -> TtsPuzzleIslamiScreen(onBack = { currentScreen = "HOME" })
+
             "MewarnaiKaligrafi", "Mewarnai" -> GaleriMewarnaiKaligrafiScreen(onBack = { currentScreen = "HOME" })
             "Imsakiyah" -> ImsakiyahPuasaScreen(onBack = { currentScreen = "HOME" })
 

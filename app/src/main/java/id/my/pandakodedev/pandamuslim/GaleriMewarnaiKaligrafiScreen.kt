@@ -49,6 +49,9 @@ enum class CalligraphyTemplate(val title: String, val arabicCalligraphy: String,
     BISMILLAH("🌸 Kaligrafi Basmalah Indah", "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ", "Warnai Kaligrafi Basmalah")
 }
 
+// Tambahkan definisi warna ini jika belum ada di file Theme.kt Anda agar kode di bawah tidak merah
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GaleriMewarnaiKaligrafiScreen(onBack: () -> Unit) {
@@ -140,7 +143,12 @@ fun GaleriMewarnaiKaligrafiScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { if (strokes.isNotEmpty()) strokes.removeLast() }) {
+                    // PERBAIKAN: Mengganti removeLast() yang dilarang Android 14 dengan removeAt() yang aman
+                    IconButton(onClick = {
+                        if (strokes.isNotEmpty()) {
+                            strokes.removeAt(strokes.lastIndex)
+                        }
+                    }) {
                         Icon(Icons.Default.Undo, contentDescription = "Undo", tint = Color.White)
                     }
                     IconButton(onClick = { strokes.clear() }) {
