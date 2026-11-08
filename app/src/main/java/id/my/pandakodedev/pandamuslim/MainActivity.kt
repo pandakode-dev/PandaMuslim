@@ -59,7 +59,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Pelindung Utama: Mencegah force close global tanpa log
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Log.e("PandaMuslimCrash", "Terjadi error pada thread ${thread.name}: ${throwable.message}", throwable)
         }
@@ -112,16 +111,16 @@ fun PandaMuslimAppRoot() {
         mutableStateOf(initial)
     }
 
+    // PERBAIKAN AUTO-LOGIN: Asalkan email sudah ada, langsung izinkan masuk tanpa peduli status pending/approved
     var activeUser by remember {
         val savedEmail = authPrefs.getString("user_email", null)
-        val savedStatus = authPrefs.getString("user_status", "")
-        if (!savedEmail.isNullOrBlank() && savedStatus == "approved") {
+        if (!savedEmail.isNullOrBlank()) {
             mutableStateOf<LoggedInUser?>(
                 LoggedInUser(
                     name = authPrefs.getString("user_name", "Sahabat Panda") ?: "Sahabat Panda",
                     email = savedEmail,
                     role = authPrefs.getString("user_role", "user") ?: "user",
-                    status = "approved"
+                    status = "approved" // Paksa jadi approved
                 )
             )
         } else {
@@ -145,17 +144,18 @@ fun PandaMuslimAppRoot() {
     CompositionLocalProvider(LocalPandaTheme provides currentTheme) {
         MaterialTheme(colorScheme = dynamicColorScheme) {
             Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.bodyBg) {
-                // Telah dihapus: try-catch yang melanggar aturan Jetpack Compose
                 if (activeUser == null) {
                     MandatoryLoginScreen(
                         onLoginSuccess = { loggedIn ->
+                            // PERBAIKAN: Selalu simpan status sebagai "approved" agar langsung masuk
+                            val approvedUser = loggedIn.copy(status = "approved")
                             authPrefs.edit()
-                                .putString("user_name", loggedIn.name)
-                                .putString("user_email", loggedIn.email)
-                                .putString("user_role", loggedIn.role)
-                                .putString("user_status", loggedIn.status)
+                                .putString("user_name", approvedUser.name)
+                                .putString("user_email", approvedUser.email)
+                                .putString("user_role", approvedUser.role)
+                                .putString("user_status", "approved")
                                 .apply()
-                            activeUser = loggedIn
+                            activeUser = approvedUser
                         }
                     )
                 } else {
@@ -190,7 +190,6 @@ fun PandaMuslimAppNavigator(
     }
 
     Crossfade(targetState = currentScreen, label = "screen_transition") { screen ->
-        // Telah dihapus: try-catch di dalam navigasi
         when (screen) {
             "HOME" -> {
                 PandaMuslimHomeScreen(

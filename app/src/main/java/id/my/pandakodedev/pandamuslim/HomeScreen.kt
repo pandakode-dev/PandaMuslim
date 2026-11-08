@@ -60,6 +60,10 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.chrono.HijrahChronology
+import java.time.temporal.ChronoField
 import java.util.Date
 import java.util.Locale
 
@@ -85,7 +89,13 @@ fun rememberOptimizedIcon(@DrawableRes resId: Int, targetPx: Int = 140): ImageBi
     }
 }
 
-data class MenuItem(val title: String, @DrawableRes val iconRes: Int, val badgeColor: Color)
+data class MenuItem(
+    val title: String,
+    @DrawableRes val iconRes: Int,
+    val badgeColor: Color,
+    val routeKey: String = title
+)
+
 data class PrayerTime(val name: String, val time: String, val isNext: Boolean = false)
 data class HomeBannerSlide(
     val id: Int,
@@ -103,6 +113,43 @@ data class ExtraFeatureCardItem(
     val subtitle: String,
     val bgColor: Color
 )
+
+// Helper Tanggal Hijriah & Event Hari Besar Islam
+private val hijriMonthsId = listOf(
+    "Muharram", "Safar", "Rabi'ul Awal", "Rabi'ul Akhir",
+    "Jumadil Awal", "Jumadil Akhir", "Rajab", "Sya'ban",
+    "Ramadhan", "Syawal", "Dzulqa'dah", "Dzulhijjah"
+)
+
+fun getTodayHijriInfo(): Triple<String, String, Boolean> {
+    return try {
+        val hDate = HijrahChronology.INSTANCE.date(LocalDate.now())
+        val day = hDate.get(ChronoField.DAY_OF_MONTH)
+        val month = hDate.get(ChronoField.MONTH_OF_YEAR)
+        val year = hDate.get(ChronoField.YEAR)
+        val monthName = hijriMonthsId.getOrElse(month - 1) { "Muharram" }
+        val dateText = "$day $monthName $year H"
+
+        val eventNote = when {
+            month == 1 && day == 1 -> "🌟 Tahun Baru Islam 1 Muharram"
+            month == 1 && day == 9 -> "💧 Jadwal Puasa Sunnah Tasu'a"
+            month == 1 && day == 10 -> "✨ Jadwal Puasa Sunnah Asyura"
+            month == 3 && day == 12 -> "🕌 Maulid Nabi Muhammad ﷺ"
+            month == 7 && day == 27 -> "🌌 Peringatan Isra' Mi'raj"
+            month == 8 && day == 15 -> "📖 Malam Nisfu Sya'ban"
+            month == 9 -> "🌙 Bulan Suci Ramadhan"
+            month == 10 && day == 1 -> "🎉 Hari Raya Idul Fitri"
+            month == 12 && day == 9 -> "🤲 Jadwal Puasa Sunnah Arafah"
+            month == 12 && day == 10 -> "🕋 Hari Raya Idul Adha"
+            day in listOf(13, 14, 15) -> "🌕 Jadwal Puasa Sunnah Ayyamul Bidh (Hari ke-$day)"
+            else -> "📅 Ketuk untuk buka Kalender Hijriah & Hari Besar Islam"
+        }
+        val isSpecial = day in listOf(13, 14, 15) || eventNote.startsWith("🌟") || eventNote.startsWith("✨") || eventNote.startsWith("🕌") || eventNote.startsWith("🌙")
+        Triple(dateText, eventNote, isSpecial)
+    } catch (_: Exception) {
+        Triple("Kalender Hijriah", "Ketuk untuk melihat Hari Besar Islam & Puasa Sunnah", false)
+    }
+}
 
 @Composable
 fun PandaMuslimHomeScreen(
@@ -158,24 +205,25 @@ fun PandaMuslimHomeScreen(
         isLoadingBanners = false
     }
 
+    // 16 Menu Utama dengan Ikon Gambar Asli (Menu Tasbih diberi label Dzikir & Tasbih, ditambah Kalender di mudah dijangkau)
     val menuRows = remember {
         listOf(
-            MenuItem("Al-Quran", R.drawable.ic_panda_quran, Color(0xFFD1FAE5)),
-            MenuItem("Tajwid", R.drawable.ic_menu_tajwid, Color(0xFFFEF3C7)),
-            MenuItem("Doa", R.drawable.ic_panda_doa, Color(0xFFE0E7FF)),
-            MenuItem("Kiblat", R.drawable.ic_panda_kiblat, Color(0xFFFCE7F3)),
-            MenuItem("Tasbih", R.drawable.ic_panda_tasbih, Color(0xFFCCFBF1)),
-            MenuItem("Video", R.drawable.ic_menu_video, Color(0xFFFFE4E6)),
-            MenuItem("Asmaul", R.drawable.ic_menu_asmaul, Color(0xFFFEF9C3)),
-            MenuItem("Belajar", R.drawable.ic_menu_belajar, Color(0xFFDBEAFE)),
-            MenuItem("Amalan", R.drawable.ic_panda_amalan, Color(0xFFDCFCE7)),
-            MenuItem("Kalkulator", R.drawable.ic_menu_kalkulator, Color(0xFFF3E8FF)),
-            MenuItem("Khatam", R.drawable.ic_menu_khatam, Color(0xFFFFEDD5)),
-            MenuItem("Komunitas", R.drawable.ic_panda_komunitas, Color(0xFFE0F2FE)),
-            MenuItem("FAQ", R.drawable.ic_menu_faq, Color(0xFFFAE8FF)),
-            MenuItem("Masukan", R.drawable.ic_menu_masukan, Color(0xFFECFCCB)),
-            MenuItem("Mewarnai", R.drawable.ic_menu_mewarnai, Color(0xFFFFE4E6)),
-            MenuItem("Iqro", R.drawable.ic_menu_iqro, Color(0xFFD1FAE5))
+            MenuItem("Al-Quran", R.drawable.ic_panda_quran, Color(0xFFD1FAE5), "Al-Quran"),
+            MenuItem("Tajwid", R.drawable.ic_menu_tajwid, Color(0xFFFEF3C7), "Tajwid"),
+            MenuItem("Doa", R.drawable.ic_panda_doa, Color(0xFFE0E7FF), "Doa"),
+            MenuItem("Kiblat", R.drawable.ic_panda_kiblat, Color(0xFFFCE7F3), "Kiblat"),
+            MenuItem("Al-Ma'tsurat", R.drawable.ic_panda_tasbih, Color(0xFFCCFBF1), "Tasbih"),
+            MenuItem("Video", R.drawable.ic_menu_video, Color(0xFFFFE4E6), "Video"),
+            MenuItem("Asmaul", R.drawable.ic_menu_asmaul, Color(0xFFFEF9C3), "Asmaul"),
+            MenuItem("Belajar", R.drawable.ic_menu_belajar, Color(0xFFDBEAFE), "Belajar"),
+            MenuItem("Amalan", R.drawable.ic_panda_amalan, Color(0xFFDCFCE7), "Amalan"),
+            MenuItem("Kalkulator", R.drawable.ic_menu_kalkulator, Color(0xFFF3E8FF), "Kalkulator"),
+            MenuItem("Khatam", R.drawable.ic_menu_khatam, Color(0xFFFFEDD5), "Khatam"),
+            MenuItem("Komunitas", R.drawable.ic_panda_komunitas, Color(0xFFE0F2FE), "Komunitas"),
+            MenuItem("FAQ", R.drawable.ic_menu_faq, Color(0xFFFAE8FF), "FAQ"),
+            MenuItem("Masukan", R.drawable.ic_menu_masukan, Color(0xFFECFCCB), "Masukan"),
+            MenuItem("Mewarnai", R.drawable.ic_menu_mewarnai, Color(0xFFFFE4E6), "Mewarnai"),
+            MenuItem("Iqro", R.drawable.ic_menu_iqro, Color(0xFFD1FAE5), "Iqro")
         ).chunked(4)
     }
 
@@ -354,7 +402,8 @@ fun PandaMuslimHomeScreen(
                     isPlayingAdzan = isPlayingAdzan,
                     isPreparingAdzan = isPreparingAdzan,
                     onToggleAdzan = { toggleAdzanSound() },
-                    onClickLocation = { showCityPickerDialog = true }
+                    onClickLocation = { showCityPickerDialog = true },
+                    onClickHijriCalendar = { onMenuClick("KalenderHijriah") }
                 )
             }
         }
@@ -380,6 +429,15 @@ fun PandaMuslimHomeScreen(
                     }
                     Spacer(modifier = Modifier.height(14.dp))
                 }
+
+                // FITUR BARU 1: KARTU PINTASAN AL-MA'TSURAT (DZIKIR PAGI & PETANG) & KALENDER HIJRIAH
+                QuickDzikirAndHijriRow(
+                    theme = currentTheme,
+                    onOpenAlMatsurat = { onMenuClick("Tasbih") },
+                    onOpenKalenderHijriah = { onMenuClick("KalenderHijriah") }
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 MengajiBookmarkTrackerCard(
                     theme = currentTheme,
@@ -410,8 +468,8 @@ fun PandaMuslimHomeScreen(
                         item = item,
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            if (item.title == "Masukan") showFeedbackDialog = true
-                            else onMenuClick(item.title)
+                            if (item.routeKey == "Masukan") showFeedbackDialog = true
+                            else onMenuClick(item.routeKey)
                         }
                     )
                 }
@@ -467,18 +525,34 @@ fun PandaMuslimHomeScreen(
                 }
                 Spacer(modifier = Modifier.height(10.dp))
                 PrayerTimesRow(prayerTimes = prayerTimes, theme = currentTheme)
-                Surface(
-                    color = GoldAccent,
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.clickable { onMenuClick("Imsakiyah") }
-                ) {
-                    Text(
-                        text = "🌙 Jadwal Imsakiyah & Puasa",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color(0xFF0F172A),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        color = GoldAccent,
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.clickable { onMenuClick("Imsakiyah") }
+                    ) {
+                        Text(
+                            text = "🌙 Jadwal Imsakiyah & Puasa",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF0F172A),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                    Surface(
+                        color = currentTheme.surfaceColor,
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.clickable { onMenuClick("KalenderHijriah") }
+                    ) {
+                        Text(
+                            text = "📅 Kalender Hijriah & Event",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            color = currentTheme.headerBg,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(32.dp))
             }
@@ -535,6 +609,158 @@ fun PandaMuslimHomeScreen(
     }
 }
 
+// =========================================================================
+// KOMPONEN BARU (DENGAN GAYA ASLI PANDAMUSLIM): PINTASAN AL-MA'TSURAT & KALENDER HIJRIAH
+// =========================================================================
+@Composable
+fun QuickDzikirAndHijriRow(
+    theme: KidsAppTheme,
+    onOpenAlMatsurat: () -> Unit,
+    onOpenKalenderHijriah: () -> Unit
+) {
+    val tasbihBitmap = rememberOptimizedIcon(R.drawable.ic_panda_tasbih, 130)
+    val kalenderBitmap = rememberOptimizedIcon(R.drawable.ic_menu_kalender_hijriah, 130)
+    val isMorning = remember { LocalTime.now().hour in 3..14 }
+    val (hijriDateStr, hijriEventStr, _) = remember { getTodayHijriInfo() }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Kartu 1: Al-Ma'tsurat Pagi & Petang (Sugro & Kubro)
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+            modifier = Modifier
+                .weight(1f)
+                .border(1.5.dp, theme.primaryColor.copy(alpha = 0.35f), RoundedCornerShape(22.dp))
+                .clickable { onOpenAlMatsurat() }
+        ) {
+            Row(
+                modifier = Modifier.padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFCCFBF1))
+                        .padding(3.dp)
+                ) {
+                    Image(
+                        bitmap = tasbihBitmap,
+                        contentDescription = "Al-Ma'tsurat",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(14.dp))
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Surface(
+                        color = if (isMorning) Color(0xFFD1FAE5) else Color(0xFFEDE9FE),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            text = if (isMorning) "☀️ DZIKIR PAGI" else "🌙 DZIKIR PETANG",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            color = if (isMorning) Color(0xFF065F46) else Color(0xFF5B21B6),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "Al-Ma'tsurat",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 13.sp,
+                        color = theme.headerBg,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Sugro, Kubro & Audio",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.Gray,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        // Kartu 2: Kalender Hijriah & Event Hari Besar Islam (Mudah Dijangkau)
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+            modifier = Modifier
+                .weight(1f)
+                .border(1.5.dp, theme.accentColor.copy(alpha = 0.6f), RoundedCornerShape(22.dp))
+                .clickable { onOpenKalenderHijriah() }
+        ) {
+            Row(
+                modifier = Modifier.padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFE0F2FE))
+                        .padding(3.dp)
+                ) {
+                    Image(
+                        bitmap = kalenderBitmap,
+                        contentDescription = "Kalender Hijriah",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(14.dp))
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Surface(
+                        color = Color(0xFFFEF3C7),
+                        shape = RoundedCornerShape(50)
+                    ) {
+                        Text(
+                            text = "📅 HARI BESAR ISLAM",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF92400E),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = hijriDateStr,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 12.sp,
+                        color = theme.headerBg,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = hijriEventStr,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.Gray,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun SixNewFeaturesGridSection(
     theme: KidsAppTheme,
@@ -549,6 +775,8 @@ fun SixNewFeaturesGridSection(
         ServerAudioAndFeatureConfig.enableLukisKaligrafi
     ) {
         buildList {
+            add(ExtraFeatureCardItem("KalenderHijriah", R.drawable.ic_menu_kalender_hijriah, "Kalender Hijriah", "Event Islam, Puasa & Amal", Color(0xFFE0F2FE)))
+            add(ExtraFeatureCardItem("Tasbih", R.drawable.ic_panda_tasbih, "Dzikir Pagi Petang", "Al-Ma'tsurat Sugro & Kubro", Color(0xFFCCFBF1)))
             add(ExtraFeatureCardItem("KisahNabi", R.drawable.ic_menu_kisah_nabi, "Kisah 25 Nabi", "Pilih Nabi & Bab Cerita", Color(0xFFFEF3C7)))
             if (ServerAudioAndFeatureConfig.enableKisahWanita) {
                 add(ExtraFeatureCardItem("KisahWanita", R.drawable.ic_menu_kisah_nabi, "Wanita Teladan", "Kisah Shahabiyah & Ibu Nabi", Color(0xFFFCE7F3)))
@@ -566,7 +794,6 @@ fun SixNewFeaturesGridSection(
                 add(ExtraFeatureCardItem("Imsakiyah", R.drawable.ic_menu_kalender_hijriah, "Imsakiyah & Puasa", "Jadwal Imsak & Puasa Sunnah", Color(0xFFEDE9FE)))
             }
             add(ExtraFeatureCardItem("KuisIslami", R.drawable.ic_menu_kuis_islami, "Kuis Pintar", "Game Cerdas Cermat", Color(0xFFD1FAE5)))
-            add(ExtraFeatureCardItem("KalenderHijriah", R.drawable.ic_menu_kalender_hijriah, "Celengan Amal", "Kalender Hijriah & Bintang", Color(0xFFE0F2FE)))
             add(ExtraFeatureCardItem("KamusHalal", R.drawable.ic_menu_kamus_halal, "Kamus Halal", "Cek Bahan & Kode Makanan", Color(0xFFFCE7F3)))
             add(ExtraFeatureCardItem("TanyaPanda", R.drawable.ic_menu_tanya_panda, "Tanya Kak Panda", "Chat Tanya Jawab Anak", Color(0xFFEDE9FE)))
             add(ExtraFeatureCardItem("PialaSertifikat", R.drawable.ic_menu_sertifikat, "Piala & Piagam", "Cetak Sertifikat Anak Sholeh", Color(0xFFFFEDD5)))
@@ -640,6 +867,9 @@ fun SixNewFeaturesGridSection(
                             }
                         }
                     }
+                }
+                if (rowPair.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -868,62 +1098,7 @@ fun BannerCarouselSlider3D(
     }
 }
 
-@Composable
-fun MosqueSilhouetteOrnamentCanvas(accentColor: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
 
-        drawCircle(
-            color = Color.White.copy(alpha = 0.05f),
-            radius = w * 0.45f,
-            center = Offset(w * 0.85f, h * 0.2f)
-        )
-
-        val lanternColor = accentColor.copy(alpha = 0.28f)
-        val lanternPositions = listOf(w * 0.88f to h * 0.22f, w * 0.76f to h * 0.16f)
-        lanternPositions.forEach { (lx, ly) ->
-            drawLine(color = lanternColor, start = Offset(lx, 0f), end = Offset(lx, ly), strokeWidth = 3f)
-            drawCircle(color = lanternColor, radius = 16f, center = Offset(lx, ly + 16f), style = Stroke(width = 3f))
-            drawCircle(color = accentColor.copy(alpha = 0.45f), radius = 6f, center = Offset(lx, ly + 16f))
-        }
-
-        val silhouetteColor = Color.Black.copy(alpha = 0.14f)
-        val baseLineY = h
-
-        val mainDomePath = Path().apply {
-            moveTo(w * 0.30f, baseLineY)
-            quadraticBezierTo(w * 0.50f, baseLineY - 130f, w * 0.70f, baseLineY)
-            close()
-        }
-        drawPath(mainDomePath, color = silhouetteColor)
-
-        drawLine(
-            color = accentColor.copy(alpha = 0.35f),
-            start = Offset(w * 0.50f, baseLineY - 65f),
-            end = Offset(w * 0.50f, baseLineY - 92f),
-            strokeWidth = 4f
-        )
-        drawCircle(color = accentColor.copy(alpha = 0.40f), radius = 8f, center = Offset(w * 0.50f, baseLineY - 100f))
-
-        val leftDomePath = Path().apply {
-            moveTo(w * 0.12f, baseLineY)
-            quadraticBezierTo(w * 0.23f, baseLineY - 75f, w * 0.34f, baseLineY)
-            close()
-        }
-        drawPath(leftDomePath, color = silhouetteColor)
-
-        val rightDomePath = Path().apply {
-            moveTo(w * 0.66f, baseLineY)
-            quadraticBezierTo(w * 0.77f, baseLineY - 75f, w * 0.88f, baseLineY)
-            close()
-        }
-        drawPath(rightDomePath, color = silhouetteColor)
-
-        drawRect(color = silhouetteColor, topLeft = Offset(w * 0.06f, baseLineY - 125f), size = Size(w * 0.045f, 125f))
-        drawRect(color = silhouetteColor, topLeft = Offset(w * 0.895f, baseLineY - 125f), size = Size(w * 0.045f, 125f))
-    }
-}
 
 @Composable
 fun HeaderSectionFast(
@@ -939,9 +1114,11 @@ fun HeaderSectionFast(
     isPlayingAdzan: Boolean,
     isPreparingAdzan: Boolean,
     onToggleAdzan: () -> Unit,
-    onClickLocation: () -> Unit
+    onClickLocation: () -> Unit,
+    onClickHijriCalendar: () -> Unit = {}
 ) {
     val homePandaBitmap = rememberOptimizedIcon(R.drawable.ic_panda_home, 180)
+    val (hijriDateStr, hijriEventNote, _) = remember { getTodayHijriInfo() }
 
     Column(
         modifier = Modifier
@@ -1090,7 +1267,43 @@ fun HeaderSectionFast(
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // PINTASAN KALENDER HIJRIAH LANGSUNG DI HEADER (SANGAT MUDAH DIJANGKAU)
+        Surface(
+            color = Color.White.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(50),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onClickHijriCalendar() }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Text("🌙", fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "$hijriDateStr  •  $hijriEventNote",
+                        color = theme.accentColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1549,153 +1762,7 @@ fun CityPickerDialog(
     )
 }
 
-// =========================================================================
-// HELPER DETEKSI GAMBAR SERVER & THUMBNAIL YOUTUBE OTOMATIS (ANTI-ERROR)
-// =========================================================================
-fun normalizeServerMediaUrl(rawUrl: String): String {
-    val clean = rawUrl.trim()
-    if (clean.isBlank()) return ""
-    if (clean.startsWith("http://") || clean.startsWith("https://")) {
-        return clean.replace(" ", "%20")
-    }
-    return "https://pandamuslim.pandakode-dev.my.id/${clean.trimStart('/')}".replace(" ", "%20")
-}
 
-fun extractYoutubeVideoId(url: String): String? {
-    if (url.isBlank()) return null
-    val patterns = listOf(
-        "(?:v=|/)([a-zA-Z0-9_-]{11})(?:[?&]|$)",
-        "youtu\\.be/([a-zA-Z0-9_-]{11})",
-        "embed/([a-zA-Z0-9_-]{11})",
-        "shorts/([a-zA-Z0-9_-]{11})",
-        "live/([a-zA-Z0-9_-]{11})"
-    )
-    for (p in patterns) {
-        val match = Regex(p).find(url.trim())
-        if (match != null) return match.groupValues[1]
-    }
-    return null
-}
-
-fun extractMediaPreviewUrl(rawMediaUrl: String): String {
-    if (rawMediaUrl.isBlank()) return ""
-    val parts = rawMediaUrl.split("|")
-
-    // 1. Cek jika ada gambar langsung (.jpg / .png / .webp)
-    for (part in parts) {
-        val clean = part.trim()
-        if (clean.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)(\\?.*)?$", RegexOption.IGNORE_CASE))) {
-            return normalizeServerMediaUrl(clean)
-        }
-    }
-
-    // 2. Cek jika mengandung Link YouTube -> ambil Thumbnail HQ otomatis!
-    for (part in parts) {
-        val ytId = extractYoutubeVideoId(part.trim())
-        if (ytId != null) {
-            return "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
-        }
-    }
-
-    val directYt = extractYoutubeVideoId(rawMediaUrl)
-    if (directYt != null) {
-        return "https://img.youtube.com/vi/$directYt/hqdefault.jpg"
-    }
-
-    return ""
-}
-
-fun extractImageUrl(rawMediaUrl: String): String = extractMediaPreviewUrl(rawMediaUrl)
-
-suspend fun fetchContentsFromServer(category: String): List<ServerContent> = withContext(Dispatchers.IO) {
-    val resultList = mutableListOf<ServerContent>()
-    try {
-        val ts = System.currentTimeMillis()
-        val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=get_contents&category=$category&_t=$ts")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        conn.useCaches = false
-        conn.setRequestProperty("Cache-Control", "no-cache")
-        conn.connectTimeout = 8000
-        conn.readTimeout = 8000
-        if (conn.responseCode == 200) {
-            val response = conn.inputStream.bufferedReader().readText()
-            val jsonObj = JSONObject(response)
-            val dataArray = jsonObj.getJSONArray("data")
-            for (i in 0 until dataArray.length()) {
-                val obj = dataArray.getJSONObject(i)
-                resultList.add(
-                    ServerContent(
-                        id = obj.getInt("id"),
-                        title = obj.getString("title"),
-                        arabicText = obj.optString("arabic_text", ""),
-                        latinText = obj.optString("latin_text", ""),
-                        description = obj.optString("description", ""),
-                        mediaUrl = obj.optString("media_url", ""),
-                        jilidLevel = 1
-                    )
-                )
-            }
-        }
-    } catch (_: Exception) {}
-    resultList
-}
-
-@Composable
-fun NetworkImageLoader(imageUrl: String, modifier: Modifier = Modifier) {
-    var bitmap by remember(imageUrl) { mutableStateOf<Bitmap?>(null) }
-    var isFailed by remember(imageUrl) { mutableStateOf(false) }
-
-    LaunchedEffect(imageUrl) {
-        if (imageUrl.isBlank()) {
-            isFailed = true
-            return@LaunchedEffect
-        }
-        withContext(Dispatchers.IO) {
-            try {
-                val normalized = normalizeServerMediaUrl(imageUrl)
-                val url = URL(normalized)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.instanceFollowRedirects = true
-                conn.connectTimeout = 8000
-                conn.readTimeout = 8000
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; PandaMuslimApp)")
-                conn.doInput = true
-                conn.connect()
-                val decoded = BitmapFactory.decodeStream(conn.inputStream)
-                if (decoded != null) {
-                    bitmap = decoded
-                } else {
-                    isFailed = true
-                }
-            } catch (_: Exception) {
-                isFailed = true
-            }
-        }
-    }
-
-    Box(contentAlignment = Alignment.Center, modifier = modifier.background(EmeraldDark)) {
-        when {
-            bitmap != null -> {
-                Image(
-                    bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            isFailed -> {
-                MosqueSilhouetteOrnamentCanvas(
-                    accentColor = GoldAccent,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-            else -> {
-                CircularProgressIndicator(color = GoldAccent, modifier = Modifier.size(24.dp))
-            }
-        }
-    }
-}
 
 fun timeStrToMinutes(timeStr: String): Int {
     return try {

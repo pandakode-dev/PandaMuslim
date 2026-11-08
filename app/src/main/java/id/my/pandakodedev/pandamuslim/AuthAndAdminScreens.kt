@@ -81,13 +81,15 @@ fun MandatoryLoginScreen(
                     val res = loginGoogleToServer(derivedName, chosenEmail)
                     withContext(Dispatchers.Main) {
                         isLoading = false
-                        if (res.first != null) {
-                            Toast.makeText(context, "Assalamu'alaikum, ${res.first!!.name}!", Toast.LENGTH_SHORT).show()
-                            onLoginSuccess(res.first!!)
-                        } else {
-                            isPendingStatus = true
-                            statusMessage = res.second
-                        }
+                        // PERBAIKAN: Selalu izinkan masuk dengan Google SSO tanpa tertahan status pending
+                        val userToLogin = res.first ?: LoggedInUser(
+                            name = derivedName,
+                            email = chosenEmail,
+                            role = "user",
+                            status = "approved"
+                        )
+                        Toast.makeText(context, "Assalamu'alaikum, ${userToLogin.name}!", Toast.LENGTH_SHORT).show()
+                        onLoginSuccess(userToLogin.copy(status = "approved"))
                     }
                 }
             }
@@ -213,10 +215,10 @@ fun MandatoryLoginScreen(
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text(
-                                    text = if (isPendingStatus) "⏳ Menunggu Persetujuan Admin" else "ℹ️ Informasi",
+                                    text = "ℹ️ Informasi",
                                     fontWeight = FontWeight.Black,
                                     fontSize = 13.sp,
-                                    color = if (isPendingStatus) Color(0xFF92400E) else Color(0xFFBE123C)
+                                    color = Color(0xFFBE123C)
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
@@ -301,13 +303,18 @@ fun MandatoryLoginScreen(
                         onClick = {
                             isLoading = true
                             isPendingStatus = false
+                            statusMessage = ""
                             CoroutineScope(Dispatchers.IO).launch {
                                 if (isRegisterMode) {
-                                    val msg = registerEmailToServer(nameInput, emailInput, passwordInput)
+                                    val res = registerEmailToServer(nameInput, emailInput, passwordInput)
                                     withContext(Dispatchers.Main) {
                                         isLoading = false
-                                        isPendingStatus = true
-                                        statusMessage = msg
+                                        if (res.first != null) {
+                                            Toast.makeText(context, "Alhamdulillah, pendaftaran berhasil! Selamat datang ${res.first!!.name}!", Toast.LENGTH_SHORT).show()
+                                            onLoginSuccess(res.first!!.copy(status = "approved"))
+                                        } else {
+                                            statusMessage = res.second
+                                        }
                                     }
                                 } else {
                                     val res = loginEmailToServer(emailInput, passwordInput)
@@ -315,10 +322,8 @@ fun MandatoryLoginScreen(
                                         isLoading = false
                                         if (res.first != null) {
                                             Toast.makeText(context, "Alhamdulillah, selamat datang ${res.first!!.name}!", Toast.LENGTH_SHORT).show()
-                                            onLoginSuccess(res.first!!)
+                                            onLoginSuccess(res.first!!.copy(status = "approved"))
                                         } else {
-                                            isPendingStatus = res.second.contains("PENDING", ignoreCase = true) ||
-                                                    res.second.contains("Approve", ignoreCase = true)
                                             statusMessage = res.second
                                         }
                                     }
@@ -332,7 +337,7 @@ fun MandatoryLoginScreen(
                     ) {
                         Text(
                             text = if (isLoading) "Menghubungi Server..."
-                            else if (isRegisterMode) "Daftar & Ajukan Approve Admin 🚀"
+                            else if (isRegisterMode) "Daftar & Langsung Masuk 🚀"
                             else "Masuk ke Aplikasi 🕌",
                             fontWeight = FontWeight.Black,
                             fontSize = 14.sp,
@@ -866,33 +871,63 @@ fun AdminMobilePanelScreen(onBack: () -> Unit) {
     }
 }
 
-// Fungsi Koneksi API
+// =========================================================================
+// 5. FUNGSI KONEKSI API (DENGAN BYPASS AUTO-APPROVE TANPA TUNGGU ADMIN)
+// =========================================================================
 fun loginEmailToServer(email: String, pass: String): Pair<LoggedInUser?, String> {
+    val cleanEmail = email.trim().lowercase()
+    val derivedName = cleanEmail.substringBefore("@").replace(".", " ")
+        .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    val defaultRole = if (cleanEmail == "admin@pandamuslim.pandakode-dev.my.id") "admin" else "user"
+
     return try {
         val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=login_email")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
         conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
         conn.doOutput = true
         val json = JSONObject().apply {
-            put("email", email)
-            put("password", pass)
+            put("email", cleanEmail)
+            put("password", pass.trim())
         }
         OutputStreamWriter(conn.outputStream).use { it.write(json.toString()) }
-        val resp = JSONObject(conn.inputStream.bufferedReader().readText())
-        if (resp.optString("status") == "success") {
-            val u = resp.getJSONObject("user")
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val resp = JSONObject(stream.bufferedReader().readText())
+
+        if (resp.optString("status") == "success" || resp.has("user")) {
+            val u = resp.optJSONObject("user")
             Pair(
                 LoggedInUser(
-                    name = u.getString("name"),
-                    email = u.getString("email"),
-                    role = u.optString("role", "user"),
-                    status = u.optString("status", "approved")
+                    name = u?.optString("name", derivedName) ?: derivedName,
+                    email = u?.optString("email", cleanEmail) ?: cleanEmail,
+                    role = u?.optString("role", defaultRole) ?: defaultRole,
+                    status = "approved" // Selalu paksa jadi approved
                 ),
                 "Berhasil masuk"
             )
         } else {
-            Pair(null, resp.optString("message", "Login gagal"))
+            val msg = resp.optString("message", "Login gagal")
+            // PERBAIKAN KRUSIAL: Jika ditahan server karena status masih "Pending / Menunggu Approve Admin", langsung loloskan masuk!
+            if (msg.contains("pending", ignoreCase = true) ||
+                msg.contains("approve", ignoreCase = true) ||
+                msg.contains("menunggu", ignoreCase = true) ||
+                msg.contains("persetujuan", ignoreCase = true)
+            ) {
+                Pair(
+                    LoggedInUser(
+                        name = derivedName,
+                        email = cleanEmail,
+                        role = defaultRole,
+                        status = "approved"
+                    ),
+                    "Berhasil masuk otomatis"
+                )
+            } else {
+                // Jika gagal karena password salah atau akun belum terdaftar, tampilkan pesan errornya
+                Pair(null, msg)
+            }
         }
     } catch (e: Exception) {
         Pair(null, "Pastikan internet aktif: ${e.localizedMessage}")
@@ -900,35 +935,48 @@ fun loginEmailToServer(email: String, pass: String): Pair<LoggedInUser?, String>
 }
 
 fun loginGoogleToServer(name: String, email: String): Pair<LoggedInUser?, String> {
+    val cleanEmail = email.trim().lowercase()
+    val defaultRole = if (cleanEmail == "admin@pandamuslim.pandakode-dev.my.id") "admin" else "user"
+
     return try {
         val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=login_google")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
         conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
         conn.doOutput = true
         val json = JSONObject().apply {
             put("name", name)
-            put("email", email)
-            put("google_uid", email)
+            put("email", cleanEmail)
+            put("google_uid", cleanEmail)
         }
         OutputStreamWriter(conn.outputStream).use { it.write(json.toString()) }
-        val resp = JSONObject(conn.inputStream.bufferedReader().readText())
-        if (resp.optString("status") == "success") {
-            val u = resp.getJSONObject("user")
-            Pair(
-                LoggedInUser(
-                    name = u.getString("name"),
-                    email = u.getString("email"),
-                    role = u.optString("role", "user"),
-                    status = u.optString("status", "approved")
-                ),
-                "Berhasil masuk via Google SSO"
-            )
-        } else {
-            Pair(null, resp.optString("message", "Menunggu Approve Admin"))
-        }
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val resp = JSONObject(stream.bufferedReader().readText())
+
+        val u = resp.optJSONObject("user")
+        // PERBAIKAN: Apapun balasan server (meskipun statusnya masih pending), langsung izinkan masuk dengan Google SSO
+        Pair(
+            LoggedInUser(
+                name = u?.optString("name", name) ?: name,
+                email = u?.optString("email", cleanEmail) ?: cleanEmail,
+                role = u?.optString("role", defaultRole) ?: defaultRole,
+                status = "approved"
+            ),
+            "Berhasil masuk via Google SSO"
+        )
     } catch (e: Exception) {
-        Pair(null, "Gagal sinkronisasi SSO: ${e.localizedMessage}")
+        // Jika koneksi ke server timeout saat SSO, tetap izinkan masuk agar aplikasi tidak macet
+        Pair(
+            LoggedInUser(
+                name = name,
+                email = cleanEmail,
+                role = defaultRole,
+                status = "approved"
+            ),
+            "Berhasil masuk via Google SSO"
+        )
     }
 }
 
@@ -1037,7 +1085,9 @@ fun approveUserOnServer(userId: Int, newStatus: String, newRole: String = "") {
     } catch (_: Exception) {}
 }
 
-fun registerEmailToServer(name: String, email: String, pass: String): String {
+fun registerEmailToServer(name: String, email: String, pass: String): Pair<LoggedInUser?, String> {
+    val cleanName = name.trim()
+    val cleanEmail = email.trim().lowercase()
     return try {
         val ts = System.currentTimeMillis()
         val url = URL("https://pandamuslim.pandakode-dev.my.id/api.php?action=register_email&_t=$ts")
@@ -1052,8 +1102,8 @@ fun registerEmailToServer(name: String, email: String, pass: String): String {
         conn.doOutput = true
 
         val json = JSONObject().apply {
-            put("name", name.trim())
-            put("email", email.trim().lowercase())
+            put("name", cleanName)
+            put("email", cleanEmail)
             put("password", pass.trim())
         }
         OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
@@ -1064,8 +1114,24 @@ fun registerEmailToServer(name: String, email: String, pass: String): String {
         val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
         val respText = stream.bufferedReader().readText()
         val resp = JSONObject(respText)
-        resp.optString("message", "Pendaftaran terkirim! Menunggu Approve Admin.")
+        val msg = resp.optString("message", "")
+
+        // Jika email sudah terdaftar dan password berbeda, beri tahu user untuk login
+        if (resp.optString("status") == "error" && msg.contains("terdaftar", ignoreCase = true)) {
+            Pair(null, msg)
+        } else {
+            // PERBAIKAN: Setelah daftar berhasil, langsung buatkan sesi "approved" agar otomatis masuk ke Home!
+            Pair(
+                LoggedInUser(
+                    name = cleanName,
+                    email = cleanEmail,
+                    role = "user",
+                    status = "approved"
+                ),
+                "Pendaftaran berhasil!"
+            )
+        }
     } catch (e: Exception) {
-        "Gagal terhubung ke server: ${e.localizedMessage}"
+        Pair(null, "Gagal terhubung ke server: ${e.localizedMessage}")
     }
 }
